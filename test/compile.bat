@@ -1,0 +1,1 @@
+P:\Tools\clang18.1.8\bin\clang.exe --target=riscv64-unknown-elf -march=rv64im -mabi=lp64 -Os -ffreestanding -fno-builtin -nostdlib -nostartfiles -mno-relax "-Wl,--no-relax" main.c -o prog.elf
