@@ -12,9 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-uint8_t        *ram = NULL;
-static uint64_t registers[32];
-static uint64_t pc = 0x0;
+uint8_t        *ram           = NULL;
+static uint64_t registers[32] = {0};
+static uint64_t pc            = 0x0;
 typedef void    opcode_func(uint32_t instruction);
 opcode_func    *opcodes[];
 
