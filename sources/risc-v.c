@@ -11,6 +11,65 @@ static uint64_t pc = 0x0;
 typedef void    opcode_func(uint32_t instruction);
 opcode_func    *opcodes[];
 
+#define MMIO_BASE 0xffff0000
+
+#define FB_ADDR   0x0
+#define FB_STRIDE 0x08
+#define FB_WIDTH  0x0c
+#define FB_HEIGHT 0x10
+#define FB_FORMAT 0x14
+#define PRESENT   0x18
+
+uint32_t read_memory32(uint64_t address) {
+	if (address >= MMIO_BASE) {
+		return 0;
+	}
+	return *(uint32_t *)&ram[address];
+}
+
+uint64_t read_memory64(uint64_t address) {
+	if (address >= MMIO_BASE) {
+		return 0;
+	}
+	return *(uint64_t *)&ram[address];
+}
+
+void store_memory8(uint64_t address, uint8_t value) {
+	if (address >= MMIO_BASE) {
+	}
+	else {
+		uint8_t *target = (uint8_t *)&ram[address];
+		*target         = value;
+	}
+}
+
+void store_memory16(uint64_t address, uint16_t value) {
+	if (address >= MMIO_BASE) {
+	}
+	else {
+		uint16_t *target = (uint16_t *)&ram[address];
+		*target          = value;
+	}
+}
+
+void store_memory32(uint64_t address, uint32_t value) {
+	if (address >= MMIO_BASE) {
+	}
+	else {
+		uint32_t *target = (uint32_t *)&ram[address];
+		*target          = value;
+	}
+}
+
+void store_memory64(uint64_t address, uint64_t value) {
+	if (address >= MMIO_BASE) {
+	}
+	else {
+		uint64_t *target = (uint64_t *)&ram[address];
+		*target          = value;
+	}
+}
+
 static void increment_pc(void) {
 	pc += 4;
 }
@@ -46,6 +105,70 @@ static void opcode_lui(uint32_t instruction) {
 	execute_opcode();
 }
 
+static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruction) {
+	uint8_t  rs1       = (instruction >> 15) & 0x1f;
+	uint8_t  rd        = (instruction >> 7) & 0x1f;
+	uint16_t immediate = instruction >> 20;
+	uint32_t shamt     = (instruction >> 20) & 0x3f;
+
+	uint8_t command = (instruction >> 12) & 0x7;
+	switch (command) {
+	case 0x0: // addi
+		registers[rd] = registers[rs1] + sign_extend64(immediate, 12);
+		break;
+	case 0x2: { // slti
+		uint64_t immediate_value = sign_extend64(immediate, 12);
+
+		int64_t x = *(int64_t *)&registers[rs1];
+		int64_t y = *(int64_t *)&immediate_value;
+
+		registers[rd] = (x < y) ? 1 : 0;
+		break;
+	}
+	case 0x3: // sltiu
+		registers[rd] = (registers[rs1] < sign_extend64(immediate, 12)) ? 1 : 0;
+		break;
+	case 0x4: // xori
+		registers[rd] = registers[rs1] ^ sign_extend64(immediate, 12);
+		break;
+	case 0x6: // ori
+		registers[rd] = registers[rs1] | sign_extend64(immediate, 12);
+		break;
+	case 0x7: // andi
+		registers[rd] = registers[rs1] & sign_extend64(immediate, 12);
+		break;
+	case 0x1: // slli
+		registers[rd] = registers[rs1] << shamt;
+		break;
+	case 0x5: { // srli_srai
+		uint8_t signed_shift = instruction >> 25;
+		if (signed_shift != 0) {
+			int64_t x     = *(int64_t *)&registers[rs1];
+			registers[rd] = x >> shamt;
+		}
+		else {
+			registers[rd] = registers[rs1] >> shamt;
+		}
+		break;
+	}
+	}
+
+	increment_pc();
+	execute_opcode();
+}
+
+static void opcode_lw(uint32_t instruction) {
+	uint8_t  rs1    = (instruction >> 15) & 0x1f;
+	uint8_t  rd     = (instruction >> 7) & 0x1f;
+	uint16_t offset = instruction >> 20;
+
+	uint32_t value = read_memory32(registers[rs1] + sign_extend64(offset, 12));
+	registers[rd]  = sign_extend64(value, 32);
+
+	increment_pc();
+	execute_opcode();
+}
+
 static void opcode_addiw(uint32_t instruction) {
 	uint8_t  rs1       = (instruction >> 15) & 0x1f;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
@@ -59,7 +182,7 @@ static void opcode_addiw(uint32_t instruction) {
 	execute_opcode();
 }
 
-static void opcode_sd(uint32_t instruction) {
+static void opcode_sb_sh_sw_sd(uint32_t instruction) {
 	uint8_t rs1 = (instruction >> 15) & 0x1f;
 	uint8_t rs2 = (instruction >> 20) & 0x1f;
 
@@ -67,8 +190,22 @@ static void opcode_sd(uint32_t instruction) {
 	uint16_t imm2      = (instruction >> 7) & 0x1f;
 	uint16_t immediate = (imm1 << 5) | imm2;
 
-	uint64_t *target = (uint64_t *)&ram[registers[rs1] + immediate];
-	*target          = registers[rs2];
+	uint8_t command = (instruction >> 12) & 0x7;
+
+	switch (command) {
+	case 0x0: // sb
+		store_memory8(registers[rs1] + immediate, *(uint8_t *)&registers[rs2]);
+		break;
+	case 0x1: // sh
+		store_memory16(registers[rs1] + immediate, *(uint16_t *)&registers[rs2]);
+		break;
+	case 0x2: // sw
+		store_memory32(registers[rs1] + immediate, *(uint32_t *)&registers[rs2]);
+		break;
+	case 0x3: // sd
+		store_memory64(registers[rs1] + immediate, registers[rs2]);
+		break;
+	}
 
 	increment_pc();
 	execute_opcode();
@@ -85,6 +222,52 @@ static void opcode_jal(uint32_t instruction) {
 	    ((instruction >> 31) & 0x1) << 20 | ((instruction >> 21) & 0x3ff) << 1 | ((instruction >> 20) & 0x1) << 11 | ((instruction >> 12) & 0xff) << 12;
 
 	pc += sign_extend64(immediate, 21);
+
+	execute_opcode();
+}
+
+static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
+	uint8_t rs1 = (instruction >> 15) & 0x1f;
+	uint8_t rs2 = (instruction >> 20) & 0x1f;
+
+	uint8_t command = (instruction >> 12) & 0x7;
+
+	bool branch = false;
+	switch (command) {
+	case 0x0: // beq
+		branch = registers[rs1] == registers[rs2];
+		break;
+	case 0x1: // bne
+		branch = registers[rs1] != registers[rs2];
+		break;
+	case 0x4: { // blt
+		int64_t x = *(int64_t *)&registers[rs1];
+		int64_t y = *(int64_t *)&registers[rs2];
+		branch    = x < y;
+		break;
+	}
+	case 0x5: { // bge
+		int64_t x = *(int64_t *)&registers[rs1];
+		int64_t y = *(int64_t *)&registers[rs2];
+		branch    = x >= y;
+		break;
+	}
+	case 0x6: // bltu
+		branch = registers[rs1] < registers[rs2];
+		break;
+	case 0x7: // bgeu
+		branch = registers[rs1] >= registers[rs2];
+		break;
+	}
+
+	if (branch) {
+		uint32_t immediate =
+		    (((instruction >> 31) & 0x1) << 12) | (((instruction >> 25) & 0x3f) << 5) | (((instruction >> 8) & 0xf) << 1) | (((instruction >> 7) & 0x1) << 11);
+		pc += sign_extend64(immediate, 13);
+	}
+	else {
+		increment_pc();
+	}
 
 	execute_opcode();
 }
@@ -171,7 +354,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_lw,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -187,7 +370,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai,
     &opcode_not_implemented, // 20
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -203,7 +386,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_sd,
+    &opcode_sb_sh_sw_sd,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -267,7 +450,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_beq_bne_blt_bge_bltu_bgeu,
     &opcode_not_implemented, // 100
     &opcode_not_implemented,
     &opcode_not_implemented,
