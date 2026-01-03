@@ -10,6 +10,8 @@
 #define FB_FORMAT 0x14
 #define PRESENT 0x18
 
+uint32_t frame = 0;
+
 void _start(void) {
 	uint8_t *mmio = (uint8_t *)MMIO_BASE;
 	
@@ -34,8 +36,8 @@ void _start(void) {
 		for (uint32_t y = 0; y < height; ++y) {
 			for (uint32_t x = 0; x < width; ++x) {
 				uint8_t *pixel = &framebuffer[stride * y + x * 4];
-				pixel[0] = x;
-				pixel[1] = y;
+				pixel[0] = (frame + x) % 256;
+				pixel[1] = (frame + y) % 256;
 				pixel[2] = 0;
 				pixel[3] = 255;
 			}
@@ -43,5 +45,7 @@ void _start(void) {
 
 		uint8_t *present_pointer = &mmio[PRESENT];
 		*present_pointer = 1;
+
+		++frame;
 	}
 }
