@@ -34,8 +34,8 @@ void _start(void) {
 		for (uint32_t y = 0; y < height; ++y) {
 			for (uint32_t x = 0; x < width; ++x) {
 				uint8_t *pixel = &framebuffer[stride * y + x * 4];
-				pixel[0] = 255;
-				pixel[1] = 0;
+				pixel[0] = x;
+				pixel[1] = y;
 				pixel[2] = 0;
 				pixel[3] = 255;
 			}

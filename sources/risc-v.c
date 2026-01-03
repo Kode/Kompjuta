@@ -226,16 +226,16 @@ static void opcode_sb_sh_sw_sd(uint32_t instruction) {
 
 	switch (command) {
 	case 0x0: // sb
-		store_memory8(registers[rs1] + immediate, *(uint8_t *)&registers[rs2]);
+		store_memory8(registers[rs1] + sign_extend64(immediate, 12), *(uint8_t *)&registers[rs2]);
 		break;
 	case 0x1: // sh
-		store_memory16(registers[rs1] + immediate, *(uint16_t *)&registers[rs2]);
+		store_memory16(registers[rs1] + sign_extend64(immediate, 12), *(uint16_t *)&registers[rs2]);
 		break;
 	case 0x2: // sw
-		store_memory32(registers[rs1] + immediate, *(uint32_t *)&registers[rs2]);
+		store_memory32(registers[rs1] + sign_extend64(immediate, 12), *(uint32_t *)&registers[rs2]);
 		break;
 	case 0x3: // sd
-		store_memory64(registers[rs1] + immediate, registers[rs2]);
+		store_memory64(registers[rs1] + sign_extend64(immediate, 12), registers[rs2]);
 		break;
 	}
 
