@@ -1,3 +1,10 @@
+#include <kore3/gpu/buffer.h>
+#include <kore3/gpu/device.h>
+#include <kore3/log.h>
+#include <kore3/system.h>
+
+#include <kong.h>
+
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -10,6 +17,12 @@ static uint64_t registers[32];
 static uint64_t pc = 0x0;
 typedef void    opcode_func(uint32_t instruction);
 opcode_func    *opcodes[];
+
+static bool     framebuffer         = false;
+static uint32_t framebuffer_width   = 0;
+static uint32_t framebuffer_height  = 0;
+static uint32_t framebuffer_stride  = 0;
+static uint64_t framebuffer_address = 0;
 
 #define MMIO_BASE 0xffff0000
 
@@ -36,6 +49,12 @@ uint64_t read_memory64(uint64_t address) {
 
 void store_memory8(uint64_t address, uint8_t value) {
 	if (address >= MMIO_BASE) {
+		uint64_t offset = address - MMIO_BASE;
+		switch (offset) {
+		case PRESENT:
+			framebuffer = true;
+			break;
+		}
 	}
 	else {
 		uint8_t *target = (uint8_t *)&ram[address];
@@ -54,6 +73,18 @@ void store_memory16(uint64_t address, uint16_t value) {
 
 void store_memory32(uint64_t address, uint32_t value) {
 	if (address >= MMIO_BASE) {
+		uint64_t offset = address - MMIO_BASE;
+		switch (offset) {
+		case FB_STRIDE:
+			framebuffer_stride = value;
+			break;
+		case FB_WIDTH:
+			framebuffer_width = value;
+			break;
+		case FB_HEIGHT:
+			framebuffer_height = value;
+			break;
+		}
 	}
 	else {
 		uint32_t *target = (uint32_t *)&ram[address];
@@ -63,6 +94,12 @@ void store_memory32(uint64_t address, uint32_t value) {
 
 void store_memory64(uint64_t address, uint64_t value) {
 	if (address >= MMIO_BASE) {
+		uint64_t offset = address - MMIO_BASE;
+		switch (offset) {
+		case FB_ADDR:
+			framebuffer_address = value;
+			break;
+		}
 	}
 	else {
 		uint64_t *target = (uint64_t *)&ram[address];
@@ -92,7 +129,6 @@ static uint64_t sign_extend64(uint64_t value, int bits) {
 
 static void opcode_nop(uint32_t instruction) {
 	increment_pc();
-	execute_opcode();
 }
 
 static void opcode_lui(uint32_t instruction) {
@@ -102,7 +138,6 @@ static void opcode_lui(uint32_t instruction) {
 	registers[rd] = immediate << 12u;
 
 	increment_pc();
-	execute_opcode();
 }
 
 static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruction) {
@@ -154,7 +189,6 @@ static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruc
 	}
 
 	increment_pc();
-	execute_opcode();
 }
 
 static void opcode_lw(uint32_t instruction) {
@@ -166,7 +200,6 @@ static void opcode_lw(uint32_t instruction) {
 	registers[rd]  = sign_extend64(value, 32);
 
 	increment_pc();
-	execute_opcode();
 }
 
 static void opcode_addiw(uint32_t instruction) {
@@ -179,7 +212,6 @@ static void opcode_addiw(uint32_t instruction) {
 	registers[rd]   = sign_extend64(result, 32);
 
 	increment_pc();
-	execute_opcode();
 }
 
 static void opcode_sb_sh_sw_sd(uint32_t instruction) {
@@ -208,7 +240,6 @@ static void opcode_sb_sh_sw_sd(uint32_t instruction) {
 	}
 
 	increment_pc();
-	execute_opcode();
 }
 
 static void opcode_jal(uint32_t instruction) {
@@ -222,8 +253,6 @@ static void opcode_jal(uint32_t instruction) {
 	    ((instruction >> 31) & 0x1) << 20 | ((instruction >> 21) & 0x3ff) << 1 | ((instruction >> 20) & 0x1) << 11 | ((instruction >> 12) & 0xff) << 12;
 
 	pc += sign_extend64(immediate, 21);
-
-	execute_opcode();
 }
 
 static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
@@ -268,8 +297,6 @@ static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
 	else {
 		increment_pc();
 	}
-
-	execute_opcode();
 }
 
 static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and(uint32_t instruction) {
@@ -337,17 +364,15 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and(uint32_t instruction)
 	}
 
 	increment_pc();
-	execute_opcode();
 }
 
 static void opcode_fence_fencei(uint32_t instruction) {
-	execute_opcode();
+	increment_pc();
 }
 
 static void opcode_not_implemented(uint32_t instruction) {
 	assert(false);
 	increment_pc();
-	execute_opcode();
 }
 
 opcode_func *opcodes[256] = {
@@ -713,10 +738,87 @@ static void read_loadable_segments(uint8_t *binary) {
 			uint64_t memory_size      = read_uint64(program_header_entry, &offset);
 			uint64_t alignment        = read_uint64(program_header_entry, &offset);
 
+			kore_log(KORE_LOG_LEVEL_INFO, "Setting up a memory area from 0x%x to 0x%x.", virtual_address, virtual_address + memory_size);
+
 			memcpy(&ram[virtual_address], &binary[file_offset], file_size);
 			memset(&ram[virtual_address + file_size], 0, memory_size - file_size);
 		}
 	}
+}
+
+static kore_gpu_device       device;
+static kore_gpu_command_list list;
+static kore_gpu_buffer       framebuffer_buffer;
+
+static const int width  = 800;
+static const int height = 600;
+
+static void update(void *data) {
+	while (!framebuffer) {
+		execute_opcode();
+	}
+
+	uint8_t *pixels        = (uint8_t *)kore_gpu_buffer_lock_all(&framebuffer_buffer);
+	uint32_t buffer_stride = kore_gpu_device_align_texture_row_bytes(&device, framebuffer_width * 4);
+	for (uint32_t y = 0; y < framebuffer_height; ++y) {
+		memcpy(&pixels[buffer_stride * y], &ram[framebuffer_address + framebuffer_stride * y], framebuffer_width * 4);
+	}
+	kore_gpu_buffer_unlock(&framebuffer_buffer);
+
+	kore_gpu_texture *gpu_framebuffer = kore_gpu_device_get_framebuffer(&device);
+
+	kore_gpu_color clear_color = {
+	    .r = 0.0f,
+	    .g = 0.0f,
+	    .b = 0.0f,
+	    .a = 1.0f,
+	};
+
+	kore_gpu_render_pass_parameters parameters = {
+	    .color_attachments_count = 1,
+	    .color_attachments =
+	        {
+	            {
+	                .load_op     = KORE_GPU_LOAD_OP_CLEAR,
+	                .clear_value = clear_color,
+	                .texture =
+	                    {
+	                        .texture           = gpu_framebuffer,
+	                        .array_layer_count = 1,
+	                        .mip_level_count   = 1,
+	                        .format            = kore_gpu_device_framebuffer_format(&device),
+	                        .dimension         = KORE_GPU_TEXTURE_VIEW_DIMENSION_2D,
+	                    },
+	            },
+	        },
+	};
+	kore_gpu_command_list_begin_render_pass(&list, &parameters);
+
+	kore_gpu_command_list_end_render_pass(&list);
+
+	kore_gpu_image_copy_buffer copy_buffer = {
+	    .buffer         = &framebuffer_buffer,
+	    .bytes_per_row  = buffer_stride,
+	    .offset         = 0,
+	    .rows_per_image = framebuffer_height,
+	};
+
+	kore_gpu_image_copy_texture copy_texture = {
+	    .texture   = gpu_framebuffer,
+	    .origin_x  = 0,
+	    .origin_y  = 0,
+	    .origin_z  = 0,
+	    .mip_level = 0,
+	    .aspect    = KORE_GPU_IMAGE_COPY_ASPECT_ALL,
+	};
+
+	kore_gpu_command_list_copy_buffer_to_texture(&list, &copy_buffer, &copy_texture, framebuffer_width, framebuffer_height, 1);
+
+	kore_gpu_command_list_present(&list);
+
+	kore_gpu_device_execute_command_list(&device, &list);
+
+	framebuffer = false;
 }
 
 int kickstart(int argc, char **argv) {
@@ -741,7 +843,32 @@ int kickstart(int argc, char **argv) {
 	read_loadable_segments(binary);
 
 	pc = entry;
-	execute_opcode();
+
+	kore_init("Kompjuta", width, height, NULL, NULL);
+	kore_set_update_callback(update, NULL);
+
+	kore_gpu_device_wishlist wishlist = {0};
+	kore_gpu_device_create(&device, &wishlist);
+
+	kong_init(&device);
+
+	kore_gpu_device_create_command_list(&device, KORE_GPU_COMMAND_LIST_TYPE_GRAPHICS, &list);
+
+	while (!framebuffer) {
+		execute_opcode();
+	}
+
+	kore_gpu_buffer_parameters parameters = {
+	    .size        = framebuffer_height * framebuffer_stride,
+	    .usage_flags = KORE_GPU_BUFFER_USAGE_CPU_WRITE | KORE_GPU_BUFFER_USAGE_COPY_SRC,
+	};
+	kore_gpu_device_create_buffer(&device, &parameters, &framebuffer_buffer);
+
+	kore_start();
+
+	kore_gpu_command_list_destroy(&list);
+
+	kore_gpu_device_destroy(&device);
 
 	return 0;
 }

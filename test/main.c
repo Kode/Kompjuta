@@ -25,7 +25,7 @@ void _start(void) {
 	*height_pointer = height;
 	*stride_pointer = stride;
 
-	uint64_t framebuffer_address = 0x800;
+	uint64_t framebuffer_address = 0x20000;
 	uint8_t *framebuffer = (uint8_t *)framebuffer_address;
 	uint64_t *framebuffer_address_pointer = (uint64_t *)&mmio[FB_ADDR];
 	*framebuffer_address_pointer = framebuffer_address;
