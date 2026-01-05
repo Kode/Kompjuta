@@ -24,7 +24,9 @@ static uint32_t framebuffer_height  = 0;
 static uint32_t framebuffer_stride  = 0;
 static uint64_t framebuffer_address = 0;
 
-#define MMIO_BASE 0xffff0000
+#define MEMORY_SIZE 1024 * 1024 * 1024
+
+#define MMIO_BASE 0xffffffff00000000
 
 #define FB_ADDR   0x0
 #define FB_STRIDE 0x08
@@ -32,6 +34,8 @@ static uint64_t framebuffer_address = 0;
 #define FB_HEIGHT 0x10
 #define FB_FORMAT 0x14
 #define PRESENT   0x18
+
+#define STACK_START MEMORY_SIZE
 
 uint32_t read_memory32(uint64_t address) {
 	if (address >= MMIO_BASE) {
@@ -856,15 +860,14 @@ int kickstart(int argc, char **argv) {
 
 	read_header(binary);
 
-	const uint64_t memory_size = 1024 * 1024 * 1024;
-
-	ram = malloc(memory_size);
+	ram = malloc(MEMORY_SIZE);
 	assert(ram != NULL);
-	memset(ram, 0, memory_size);
+	memset(ram, 0, MEMORY_SIZE);
 
 	read_loadable_segments(binary);
 
-	pc = entry;
+	pc           = entry;
+	registers[2] = STACK_START;
 
 	kore_init("Kompjuta", width, height, NULL, NULL);
 	kore_set_update_callback(update, NULL);
