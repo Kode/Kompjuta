@@ -35,10 +35,31 @@ static uint64_t framebuffer_address = 0;
 #define FB_FORMAT 0x14
 #define PRESENT   0x18
 
-#define STACK_START MEMORY_SIZE
+uint32_t read_memory8(uint64_t address) {
+	if (address >= MMIO_BASE) {
+		return 0;
+	}
+	return ram[address];
+}
+
+uint16_t read_memory16(uint64_t address) {
+	if (address >= MMIO_BASE) {
+		return 0;
+	}
+	return *(uint16_t *)&ram[address];
+}
 
 uint32_t read_memory32(uint64_t address) {
 	if (address >= MMIO_BASE) {
+		uint64_t offset = address - MMIO_BASE;
+		switch (offset) {
+		case FB_STRIDE:
+			return framebuffer_stride;
+		case FB_WIDTH:
+			return framebuffer_width;
+		case FB_HEIGHT:
+			return framebuffer_height;
+		}
 		return 0;
 	}
 	return *(uint32_t *)&ram[address];
@@ -46,6 +67,11 @@ uint32_t read_memory32(uint64_t address) {
 
 uint64_t read_memory64(uint64_t address) {
 	if (address >= MMIO_BASE) {
+		uint64_t offset = address - MMIO_BASE;
+		switch (offset) {
+		case FB_ADDR:
+			return framebuffer_address;
+		}
 		return 0;
 	}
 	return *(uint64_t *)&ram[address];
@@ -61,8 +87,7 @@ void store_memory8(uint64_t address, uint8_t value) {
 		}
 	}
 	else {
-		uint8_t *target = (uint8_t *)&ram[address];
-		*target         = value;
+		ram[address] = value;
 	}
 }
 
@@ -77,18 +102,6 @@ void store_memory16(uint64_t address, uint16_t value) {
 
 void store_memory32(uint64_t address, uint32_t value) {
 	if (address >= MMIO_BASE) {
-		uint64_t offset = address - MMIO_BASE;
-		switch (offset) {
-		case FB_STRIDE:
-			framebuffer_stride = value;
-			break;
-		case FB_WIDTH:
-			framebuffer_width = value;
-			break;
-		case FB_HEIGHT:
-			framebuffer_height = value;
-			break;
-		}
 	}
 	else {
 		uint32_t *target = (uint32_t *)&ram[address];
@@ -98,12 +111,6 @@ void store_memory32(uint64_t address, uint32_t value) {
 
 void store_memory64(uint64_t address, uint64_t value) {
 	if (address >= MMIO_BASE) {
-		uint64_t offset = address - MMIO_BASE;
-		switch (offset) {
-		case FB_ADDR:
-			framebuffer_address = value;
-			break;
-		}
 	}
 	else {
 		uint64_t *target = (uint64_t *)&ram[address];
@@ -199,18 +206,61 @@ static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruc
 		}
 		break;
 	}
+	default:
+		assert(false);
+		break;
 	}
 
 	increment_pc();
 }
 
-static void opcode_lw(uint32_t instruction) {
+static void opcode_lb_lh_lw_lbu_lhu_lwu_ld(uint32_t instruction) {
 	uint8_t  rs1    = (instruction >> 15) & 0x1f;
 	uint8_t  rd     = (instruction >> 7) & 0x1f;
 	uint16_t offset = instruction >> 20;
 
-	uint32_t value = read_memory32(registers[rs1] + sign_extend64(offset, 12));
-	registers[rd]  = sign_extend64(value, 32);
+	uint8_t command = (instruction >> 12) & 0x7;
+
+	switch (command) {
+	case 0x0: { // lb
+		uint8_t value = read_memory8(registers[rs1] + sign_extend64(offset, 12));
+		registers[rd] = sign_extend64(value, 8);
+		break;
+	}
+	case 0x1: { // lh
+		uint16_t value = read_memory16(registers[rs1] + sign_extend64(offset, 12));
+		registers[rd]  = sign_extend64(value, 16);
+		break;
+	}
+	case 0x2: { // lw
+		uint32_t value = read_memory32(registers[rs1] + sign_extend64(offset, 12));
+		registers[rd]  = sign_extend64(value, 32);
+		break;
+	}
+	case 0x4: { // lbu
+		uint64_t value = read_memory8(registers[rs1] + sign_extend64(offset, 12));
+		registers[rd]  = value & 0xff;
+		break;
+	}
+	case 0x5: { // lhu
+		uint64_t value = read_memory16(registers[rs1] + sign_extend64(offset, 12));
+		registers[rd]  = value & 0xffff;
+		break;
+	}
+	case 0x6: { // lwu
+		uint64_t value = read_memory32(registers[rs1] + sign_extend64(offset, 12));
+		registers[rd]  = value & 0xffffffff;
+		break;
+	}
+	case 0x3: { // ld
+		uint64_t value = read_memory64(registers[rs1] + sign_extend64(offset, 12));
+		registers[rd]  = value;
+		break;
+	}
+	default:
+		assert(false);
+		break;
+	}
 
 	increment_pc();
 }
@@ -249,6 +299,9 @@ static void opcode_sb_sh_sw_sd(uint32_t instruction) {
 		break;
 	case 0x3: // sd
 		store_memory64(registers[rs1] + sign_extend64(immediate, 12), registers[rs2]);
+		break;
+	default:
+		assert(false);
 		break;
 	}
 
@@ -313,6 +366,9 @@ static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
 	case 0x7: // bgeu
 		branch = registers[rs1] >= registers[rs2];
 		break;
+	default:
+		assert(false);
+		break;
 	}
 
 	if (branch) {
@@ -325,7 +381,8 @@ static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
 	}
 }
 
-static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and(uint32_t instruction) {
+static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu_div_divu_rem_remu(uint32_t instruction) {
+	uint8_t upper  = (instruction >> 25) & 0x7f;
 	uint8_t middle = (instruction >> 12) & 0x7;
 
 	uint8_t rs1 = (instruction >> 15) & 0x1f;
@@ -335,7 +392,6 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and(uint32_t instruction)
 	if (rd != 0) {
 		switch (middle) {
 		case 0x0: { // add_sub
-			uint8_t upper = (instruction >> 25) & 0x7f;
 
 			switch (upper) {
 			case 0x00: // add
@@ -344,47 +400,110 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and(uint32_t instruction)
 			case 0x30: // sub
 				registers[rd] = registers[rs1] - registers[rs2];
 				break;
+			case 0x01: { // mul
+				int64_t x     = *(int64_t *)&registers[rs1];
+				int64_t y     = *(int64_t *)&registers[rs2];
+				registers[rd] = x * y;
+				break;
+			}
+			default:
+				assert(false);
+				break;
 			}
 			break;
 		}
-		case 0x1: // sll
-			registers[rd] = registers[rs1] << registers[rs2];
+		case 0x1: // sll_mulh
+			switch (upper) {
+			case 0x00: // sll
+				registers[rd] = registers[rs1] << registers[rs2];
+				break;
+			case 0x01: // mulh
+				assert(false);
+				break;
+			default:
+				assert(false);
+				break;
+			}
 			break;
-		case 0x2: { // slt
-			int64_t x     = *(int64_t *)&registers[rs1];
-			int64_t y     = *(int64_t *)&registers[rs2];
-			registers[rd] = (x < y) ? 1u : 0u;
+		case 0x2: { // slt_mulhsu
+			int64_t x = *(int64_t *)&registers[rs1];
+			int64_t y = *(int64_t *)&registers[rs2];
+			switch (upper) {
+			case 0x00: // slt
+				registers[rd] = (x < y) ? 1u : 0u;
+				break;
+			case 0x01: // mulhsu
+				assert(false);
+				break;
+			}
 			break;
 		}
-		case 0x3: // sltu
-			registers[rd] = (registers[rs1] < registers[rs2]) ? 1u : 0u;
+		case 0x3: // sltu_mulhu
+			switch (upper) {
+			case 0x00: // sltu
+				registers[rd] = (registers[rs1] < registers[rs2]) ? 1u : 0u;
+				break;
+			case 0x01: // mulhu
+				assert(false);
+				break;
+			}
 			break;
-		case 0x4: // xor
-			registers[rd] = registers[rs1] ^ registers[rs2];
+		case 0x4: // xor_div
+			switch (upper) {
+			case 0x00: // xor
+				registers[rd] = registers[rs1] ^ registers[rs2];
+				break;
+			case 0x01: // div
+				assert(false);
+				break;
+			}
 			break;
-		case 0x5: { // srl_sra
+		case 0x5: { // srl_sra_divu
 			uint8_t upper = (instruction >> 25) & 0x7f;
 
 			uint8_t y = registers[rs2] & 0x1f;
 
 			switch (upper) {
-			case 0x0: // srl
+			case 0x00: // srl
 				registers[rd] = registers[rs1] >> y;
+				break;
+			case 0x01: // divu
+				assert(false);
 				break;
 			case 0x20: { // sra
 				int64_t x      = *(int64_t *)&registers[rs1];
 				int64_t result = x >> y;
 				registers[rd]  = *(uint64_t *)&result;
 				break;
+			default:
+				assert(false);
+				break;
 			}
 			}
 			break;
 		}
-		case 0x6: // or
-			registers[rd] = registers[rs1] | registers[rs2];
+		case 0x6: // or_rem
+			switch (upper) {
+			case 0x00: // or
+				registers[rd] = registers[rs1] | registers[rs2];
+				break;
+			case 0x01: // rem
+				assert(false);
+				break;
+			}
 			break;
-		case 0x7: // and
-			registers[rd] = registers[rs1] & registers[rs2];
+		case 0x7: // and_remu
+			switch (upper) {
+			case 0x00: // and
+				registers[rd] = registers[rs1] & registers[rs2];
+				break;
+			case 0x01: // remu
+				assert(false);
+				break;
+			}
+			break;
+		default:
+			assert(false);
 			break;
 		}
 	}
@@ -436,6 +555,9 @@ static void opcode_addw_subw_sllw_srlw_sraw(uint32_t instruction) {
 			}
 			break;
 		}
+		default:
+			assert(false);
+			break;
 		}
 	}
 
@@ -455,7 +577,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_lw,
+    &opcode_lb_lh_lw_lbu_lhu_lwu_ld,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -503,7 +625,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented, // 50
-    &opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and,
+    &opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu_div_divu_rem_remu,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -916,8 +1038,13 @@ int kickstart(int argc, char **argv) {
 
 	read_loadable_segments(binary);
 
+	framebuffer_width   = width;
+	framebuffer_height  = height;
+	framebuffer_stride  = framebuffer_width * 4u;
+	framebuffer_address = MEMORY_SIZE - framebuffer_stride * framebuffer_height;
+
 	pc           = entry;
-	registers[2] = STACK_START;
+	registers[2] = framebuffer_address; // stack start, grows downwards
 
 	kore_init("Kompjuta", width, height, NULL, NULL);
 	kore_set_update_callback(update, NULL);
@@ -934,7 +1061,7 @@ int kickstart(int argc, char **argv) {
 	}
 
 	kore_gpu_buffer_parameters parameters = {
-	    .size        = framebuffer_height * framebuffer_stride,
+	    .size        = kore_gpu_device_align_texture_row_bytes(&device, framebuffer_width * 4) * framebuffer_height,
 	    .usage_flags = KORE_GPU_BUFFER_USAGE_CPU_WRITE | KORE_GPU_BUFFER_USAGE_COPY_SRC,
 	};
 	kore_gpu_device_create_buffer(&device, &parameters, &framebuffer_buffer);
