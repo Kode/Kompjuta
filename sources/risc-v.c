@@ -135,7 +135,16 @@ static void opcode_lui(uint32_t instruction) {
 	uint32_t immediate = instruction >> 12u;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 
-	registers[rd] = immediate << 12u;
+	registers[rd] = sign_extend64(immediate << 12u, 32);
+
+	increment_pc();
+}
+
+static void opcode_auipc(uint32_t instruction) {
+	uint32_t immediate = instruction >> 12u;
+	uint8_t  rd        = (instruction >> 7) & 0x1f;
+
+	registers[rd] = pc + sign_extend64(immediate << 12u, 32);
 
 	increment_pc();
 }
@@ -253,6 +262,19 @@ static void opcode_jal(uint32_t instruction) {
 	    ((instruction >> 31) & 0x1) << 20 | ((instruction >> 21) & 0x3ff) << 1 | ((instruction >> 20) & 0x1) << 11 | ((instruction >> 12) & 0xff) << 12;
 
 	pc += sign_extend64(immediate, 21);
+}
+
+static void opcode_jalr(uint32_t instruction) {
+	uint8_t  rs1       = (instruction >> 15) & 0x1f;
+	uint8_t  rd        = (instruction >> 7) & 0x1f;
+	uint16_t immediate = (instruction >> 20) & 0xfff;
+
+	uint64_t t = pc + 4;
+	pc         = (registers[rs1] + sign_extend64(immediate, 12)) & ~1;
+
+	if (rd != 0) {
+		registers[rd] = t;
+	}
 }
 
 static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
@@ -399,7 +421,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented, // 20
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_auipc,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -479,7 +501,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented, // 100
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_jalr,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -822,7 +844,7 @@ static void update(void *data) {
 }
 
 int kickstart(int argc, char **argv) {
-	FILE *file = fopen("prog.elf", "rb");
+	FILE *file = fopen("framebuffer.elf", "rb");
 	fseek(file, 0, SEEK_END);
 	uint32_t size = ftell(file);
 	fseek(file, 0, 0);
@@ -834,7 +856,7 @@ int kickstart(int argc, char **argv) {
 
 	read_header(binary);
 
-	const uint64_t memory_size = 64 * 1024 * 1024;
+	const uint64_t memory_size = 1024 * 1024 * 1024;
 
 	ram = malloc(memory_size);
 	assert(ram != NULL);
