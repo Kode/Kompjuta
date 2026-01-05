@@ -371,7 +371,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and(uint32_t instruction)
 			case 0x0: // srl
 				registers[rd] = registers[rs1] >> y;
 				break;
-			case 0x20: { // src
+			case 0x20: { // sra
 				int64_t x      = *(int64_t *)&registers[rs1];
 				int64_t result = x >> y;
 				registers[rd]  = *(uint64_t *)&result;
@@ -386,6 +386,56 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and(uint32_t instruction)
 		case 0x7: // and
 			registers[rd] = registers[rs1] & registers[rs2];
 			break;
+		}
+	}
+
+	increment_pc();
+}
+
+static void opcode_addw_subw_sllw_srlw_sraw(uint32_t instruction) {
+	uint8_t middle = (instruction >> 12) & 0x7;
+
+	uint8_t rs1 = (instruction >> 15) & 0x1f;
+	uint8_t rs2 = (instruction >> 20) & 0x1f;
+	uint8_t rd  = (instruction >> 7) & 0x1f;
+
+	if (rd != 0) {
+		switch (middle) {
+		case 0x0: { // addw_subw
+			uint8_t upper = (instruction >> 25) & 0x7f;
+
+			switch (upper) {
+			case 0x00: // addw
+				registers[rd] = sign_extend64((registers[rs1] + registers[rs2]) & 0xffffffff, 32);
+				break;
+			case 0x30: // subw
+				registers[rd] = sign_extend64((registers[rs1] - registers[rs2]) & 0xffffffff, 32);
+				break;
+			}
+			break;
+		}
+		case 0x1: // sllw
+			registers[rd] = sign_extend64((registers[rs1] << (registers[rs2] & 0x1f)) & 0xffffffff, 32);
+			break;
+		case 0x5: { // srlw_sraw
+			uint8_t upper = (instruction >> 25) & 0x7f;
+
+			uint8_t y = registers[rs2] & 0x1f;
+
+			switch (upper) {
+			case 0x0: // srlw
+				registers[rd] = sign_extend64((registers[rs1] & 0xffffffff) >> y, 32);
+				break;
+			case 0x20: { // sraw
+				uint64_t reg1   = registers[rs1] & 0xffffffff;
+				int32_t  x      = *(int32_t *)&reg1;
+				int32_t  result = x >> y;
+				registers[rd]   = sign_extend64(result, 32);
+				break;
+			}
+			}
+			break;
+		}
 		}
 	}
 
@@ -461,7 +511,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_addw_subw_sllw_srlw_sraw,
     &opcode_not_implemented, // 60
     &opcode_not_implemented,
     &opcode_not_implemented,
