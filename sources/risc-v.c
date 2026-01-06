@@ -67,11 +67,6 @@ uint32_t read_memory32(uint64_t address) {
 
 uint64_t read_memory64(uint64_t address) {
 	if (address >= MMIO_BASE) {
-		uint64_t offset = address - MMIO_BASE;
-		switch (offset) {
-		case FB_ADDR:
-			return framebuffer_address;
-		}
 		return 0;
 	}
 	return *(uint64_t *)&ram[address];
@@ -111,6 +106,12 @@ void store_memory32(uint64_t address, uint32_t value) {
 
 void store_memory64(uint64_t address, uint64_t value) {
 	if (address >= MMIO_BASE) {
+		uint64_t offset = address - MMIO_BASE;
+		switch (offset) {
+		case FB_ADDR:
+			framebuffer_address = value;
+			break;
+		}
 	}
 	else {
 		uint64_t *target = (uint64_t *)&ram[address];
@@ -196,13 +197,19 @@ static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruc
 		registers[rd] = registers[rs1] << shamt;
 		break;
 	case 0x5: { // srli_srai
-		uint8_t signed_shift = instruction >> 25;
-		if (signed_shift != 0) {
+		uint8_t upper = instruction >> 26;
+		switch (upper) {
+		case 0x00: // srli
+			registers[rd] = registers[rs1] >> shamt;
+			break;
+		case 0x10: { // srai
 			int64_t x     = *(int64_t *)&registers[rs1];
 			registers[rd] = x >> shamt;
+			break;
 		}
-		else {
-			registers[rd] = registers[rs1] >> shamt;
+		default:
+			assert(false);
+			break;
 		}
 		break;
 	}
@@ -392,7 +399,6 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 	if (rd != 0) {
 		switch (middle) {
 		case 0x0: { // add_sub
-
 			switch (upper) {
 			case 0x00: // add
 				registers[rd] = registers[rs1] + registers[rs2];
@@ -1043,8 +1049,7 @@ int kickstart(int argc, char **argv) {
 	framebuffer_stride  = framebuffer_width * 4u;
 	framebuffer_address = MEMORY_SIZE - framebuffer_stride * framebuffer_height;
 
-	pc           = entry;
-	registers[2] = framebuffer_address; // stack start, grows downwards
+	pc = entry;
 
 	kore_init("Kompjuta", width, height, NULL, NULL);
 	kore_set_update_callback(update, NULL);
