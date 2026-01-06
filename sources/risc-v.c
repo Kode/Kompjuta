@@ -14,9 +14,10 @@
 
 #include "mmio.h"
 
-uint8_t        *ram           = NULL;
-static uint64_t registers[32] = {0};
-static uint64_t pc            = 0x0;
+uint8_t        *ram   = NULL;
+static uint64_t x[32] = {0};
+static double   f[32] = {0};
+static uint64_t pc    = 0x0;
 typedef void    opcode_func(uint32_t instruction);
 opcode_func    *opcodes[];
 
@@ -158,7 +159,7 @@ static void opcode_lui(uint32_t instruction) {
 	uint32_t immediate = instruction >> 12u;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 
-	registers[rd] = sign_extend64(immediate << 12u, 32);
+	x[rd] = sign_extend64(immediate << 12u, 32);
 
 	increment_pc();
 }
@@ -167,7 +168,7 @@ static void opcode_auipc(uint32_t instruction) {
 	uint32_t immediate = instruction >> 12u;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 
-	registers[rd] = pc + sign_extend64(immediate << 12u, 32);
+	x[rd] = pc + sign_extend64(immediate << 12u, 32);
 
 	increment_pc();
 }
@@ -181,41 +182,41 @@ static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruc
 	uint8_t command = (instruction >> 12) & 0x7;
 	switch (command) {
 	case 0x0: // addi
-		registers[rd] = registers[rs1] + sign_extend64(immediate, 12);
+		x[rd] = x[rs1] + sign_extend64(immediate, 12);
 		break;
 	case 0x2: { // slti
 		uint64_t immediate_value = sign_extend64(immediate, 12);
 
-		int64_t x = *(int64_t *)&registers[rs1];
-		int64_t y = *(int64_t *)&immediate_value;
+		int64_t rs1_value = *(int64_t *)&x[rs1];
+		int64_t rs2_value = *(int64_t *)&immediate_value;
 
-		registers[rd] = (x < y) ? 1 : 0;
+		x[rd] = (rs1_value < rs2_value) ? 1 : 0;
 		break;
 	}
 	case 0x3: // sltiu
-		registers[rd] = (registers[rs1] < sign_extend64(immediate, 12)) ? 1 : 0;
+		x[rd] = (x[rs1] < sign_extend64(immediate, 12)) ? 1 : 0;
 		break;
 	case 0x4: // xori
-		registers[rd] = registers[rs1] ^ sign_extend64(immediate, 12);
+		x[rd] = x[rs1] ^ sign_extend64(immediate, 12);
 		break;
 	case 0x6: // ori
-		registers[rd] = registers[rs1] | sign_extend64(immediate, 12);
+		x[rd] = x[rs1] | sign_extend64(immediate, 12);
 		break;
 	case 0x7: // andi
-		registers[rd] = registers[rs1] & sign_extend64(immediate, 12);
+		x[rd] = x[rs1] & sign_extend64(immediate, 12);
 		break;
 	case 0x1: // slli
-		registers[rd] = registers[rs1] << shamt;
+		x[rd] = x[rs1] << shamt;
 		break;
 	case 0x5: { // srli_srai
 		uint8_t upper = instruction >> 26;
 		switch (upper) {
 		case 0x00: // srli
-			registers[rd] = registers[rs1] >> shamt;
+			x[rd] = x[rs1] >> shamt;
 			break;
 		case 0x10: { // srai
-			int64_t x     = *(int64_t *)&registers[rs1];
-			registers[rd] = x >> shamt;
+			int64_t rs1_value = *(int64_t *)&x[rs1];
+			x[rd]             = rs1_value >> shamt;
 			break;
 		}
 		default:
@@ -241,38 +242,38 @@ static void opcode_lb_lh_lw_lbu_lhu_lwu_ld(uint32_t instruction) {
 
 	switch (command) {
 	case 0x0: { // lb
-		uint8_t value = read_memory8(registers[rs1] + sign_extend64(offset, 12));
-		registers[rd] = sign_extend64(value, 8);
+		uint8_t value = read_memory8(x[rs1] + sign_extend64(offset, 12));
+		x[rd]         = sign_extend64(value, 8);
 		break;
 	}
 	case 0x1: { // lh
-		uint16_t value = read_memory16(registers[rs1] + sign_extend64(offset, 12));
-		registers[rd]  = sign_extend64(value, 16);
+		uint16_t value = read_memory16(x[rs1] + sign_extend64(offset, 12));
+		x[rd]          = sign_extend64(value, 16);
 		break;
 	}
 	case 0x2: { // lw
-		uint32_t value = read_memory32(registers[rs1] + sign_extend64(offset, 12));
-		registers[rd]  = sign_extend64(value, 32);
+		uint32_t value = read_memory32(x[rs1] + sign_extend64(offset, 12));
+		x[rd]          = sign_extend64(value, 32);
 		break;
 	}
 	case 0x4: { // lbu
-		uint64_t value = read_memory8(registers[rs1] + sign_extend64(offset, 12));
-		registers[rd]  = value & 0xff;
+		uint64_t value = read_memory8(x[rs1] + sign_extend64(offset, 12));
+		x[rd]          = value & 0xff;
 		break;
 	}
 	case 0x5: { // lhu
-		uint64_t value = read_memory16(registers[rs1] + sign_extend64(offset, 12));
-		registers[rd]  = value & 0xffff;
+		uint64_t value = read_memory16(x[rs1] + sign_extend64(offset, 12));
+		x[rd]          = value & 0xffff;
 		break;
 	}
 	case 0x6: { // lwu
-		uint64_t value = read_memory32(registers[rs1] + sign_extend64(offset, 12));
-		registers[rd]  = value & 0xffffffff;
+		uint64_t value = read_memory32(x[rs1] + sign_extend64(offset, 12));
+		x[rd]          = value & 0xffffffff;
 		break;
 	}
 	case 0x3: { // ld
-		uint64_t value = read_memory64(registers[rs1] + sign_extend64(offset, 12));
-		registers[rd]  = value;
+		uint64_t value = read_memory64(x[rs1] + sign_extend64(offset, 12));
+		x[rd]          = value;
 		break;
 	}
 	default:
@@ -288,9 +289,9 @@ static void opcode_addiw(uint32_t instruction) {
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 	uint16_t immediate = instruction >> 20u;
 
-	uint32_t x      = (uint32_t)registers[rs1];
-	uint32_t result = x + sign_extend32(immediate, 12);
-	registers[rd]   = sign_extend64(result, 32);
+	uint32_t rs1_value = (uint32_t)x[rs1];
+	uint32_t result    = rs1_value + sign_extend32(immediate, 12);
+	x[rd]              = sign_extend64(result, 32);
 
 	increment_pc();
 }
@@ -307,16 +308,16 @@ static void opcode_sb_sh_sw_sd(uint32_t instruction) {
 
 	switch (command) {
 	case 0x0: // sb
-		store_memory8(registers[rs1] + sign_extend64(immediate, 12), *(uint8_t *)&registers[rs2]);
+		store_memory8(x[rs1] + sign_extend64(immediate, 12), *(uint8_t *)&x[rs2]);
 		break;
 	case 0x1: // sh
-		store_memory16(registers[rs1] + sign_extend64(immediate, 12), *(uint16_t *)&registers[rs2]);
+		store_memory16(x[rs1] + sign_extend64(immediate, 12), *(uint16_t *)&x[rs2]);
 		break;
 	case 0x2: // sw
-		store_memory32(registers[rs1] + sign_extend64(immediate, 12), *(uint32_t *)&registers[rs2]);
+		store_memory32(x[rs1] + sign_extend64(immediate, 12), *(uint32_t *)&x[rs2]);
 		break;
 	case 0x3: // sd
-		store_memory64(registers[rs1] + sign_extend64(immediate, 12), registers[rs2]);
+		store_memory64(x[rs1] + sign_extend64(immediate, 12), x[rs2]);
 		break;
 	default:
 		assert(false);
@@ -330,7 +331,7 @@ static void opcode_jal(uint32_t instruction) {
 	uint8_t rd = (instruction >> 7) & 0x1f;
 
 	if (rd != 0) {
-		registers[rd] = pc + 4;
+		x[rd] = pc + 4;
 	}
 
 	uint32_t immediate =
@@ -345,10 +346,10 @@ static void opcode_jalr(uint32_t instruction) {
 	uint16_t immediate = (instruction >> 20) & 0xfff;
 
 	uint64_t t = pc + 4;
-	pc         = (registers[rs1] + sign_extend64(immediate, 12)) & ~1;
+	pc         = (x[rs1] + sign_extend64(immediate, 12)) & ~1;
 
 	if (rd != 0) {
-		registers[rd] = t;
+		x[rd] = t;
 	}
 }
 
@@ -361,28 +362,28 @@ static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
 	bool branch = false;
 	switch (command) {
 	case 0x0: // beq
-		branch = registers[rs1] == registers[rs2];
+		branch = x[rs1] == x[rs2];
 		break;
 	case 0x1: // bne
-		branch = registers[rs1] != registers[rs2];
+		branch = x[rs1] != x[rs2];
 		break;
 	case 0x4: { // blt
-		int64_t x = *(int64_t *)&registers[rs1];
-		int64_t y = *(int64_t *)&registers[rs2];
-		branch    = x < y;
+		int64_t rs1_value = *(int64_t *)&x[rs1];
+		int64_t rs2_value = *(int64_t *)&x[rs2];
+		branch            = rs1_value < rs2_value;
 		break;
 	}
 	case 0x5: { // bge
-		int64_t x = *(int64_t *)&registers[rs1];
-		int64_t y = *(int64_t *)&registers[rs2];
-		branch    = x >= y;
+		int64_t rs1_value = *(int64_t *)&x[rs1];
+		int64_t rs2_value = *(int64_t *)&x[rs2];
+		branch            = rs1_value >= rs2_value;
 		break;
 	}
 	case 0x6: // bltu
-		branch = registers[rs1] < registers[rs2];
+		branch = x[rs1] < x[rs2];
 		break;
 	case 0x7: // bgeu
-		branch = registers[rs1] >= registers[rs2];
+		branch = x[rs1] >= x[rs2];
 		break;
 	default:
 		assert(false);
@@ -412,15 +413,15 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x0: { // add_sub
 			switch (upper) {
 			case 0x00: // add
-				registers[rd] = registers[rs1] + registers[rs2];
+				x[rd] = x[rs1] + x[rs2];
 				break;
 			case 0x30: // sub
-				registers[rd] = registers[rs1] - registers[rs2];
+				x[rd] = x[rs1] - x[rs2];
 				break;
 			case 0x01: { // mul
-				int64_t x     = *(int64_t *)&registers[rs1];
-				int64_t y     = *(int64_t *)&registers[rs2];
-				registers[rd] = x * y;
+				int64_t rs1_value = *(int64_t *)&x[rs1];
+				int64_t rs2_value = *(int64_t *)&x[rs2];
+				x[rd]             = rs1_value * rs2_value;
 				break;
 			}
 			default:
@@ -432,7 +433,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x1: // sll_mulh
 			switch (upper) {
 			case 0x00: // sll
-				registers[rd] = registers[rs1] << registers[rs2];
+				x[rd] = x[rs1] << x[rs2];
 				break;
 			case 0x01: // mulh
 				assert(false);
@@ -443,11 +444,11 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 			}
 			break;
 		case 0x2: { // slt_mulhsu
-			int64_t x = *(int64_t *)&registers[rs1];
-			int64_t y = *(int64_t *)&registers[rs2];
+			int64_t rs1_value = *(int64_t *)&x[rs1];
+			int64_t rs2_value = *(int64_t *)&x[rs2];
 			switch (upper) {
 			case 0x00: // slt
-				registers[rd] = (x < y) ? 1u : 0u;
+				x[rd] = (rs1_value < rs2_value) ? 1u : 0u;
 				break;
 			case 0x01: // mulhsu
 				assert(false);
@@ -458,7 +459,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x3: // sltu_mulhu
 			switch (upper) {
 			case 0x00: // sltu
-				registers[rd] = (registers[rs1] < registers[rs2]) ? 1u : 0u;
+				x[rd] = (x[rs1] < x[rs2]) ? 1u : 0u;
 				break;
 			case 0x01: // mulhu
 				assert(false);
@@ -468,7 +469,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x4: // xor_div
 			switch (upper) {
 			case 0x00: // xor
-				registers[rd] = registers[rs1] ^ registers[rs2];
+				x[rd] = x[rs1] ^ x[rs2];
 				break;
 			case 0x01: // div
 				assert(false);
@@ -478,19 +479,19 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x5: { // srl_sra_divu
 			uint8_t upper = (instruction >> 25) & 0x7f;
 
-			uint8_t y = registers[rs2] & 0x1f;
+			uint8_t rs2_value = x[rs2] & 0x1f;
 
 			switch (upper) {
 			case 0x00: // srl
-				registers[rd] = registers[rs1] >> y;
+				x[rd] = x[rs1] >> rs2_value;
 				break;
 			case 0x01: // divu
 				assert(false);
 				break;
 			case 0x20: { // sra
-				int64_t x      = *(int64_t *)&registers[rs1];
-				int64_t result = x >> y;
-				registers[rd]  = *(uint64_t *)&result;
+				int64_t rs1_value = *(int64_t *)&x[rs1];
+				int64_t result    = rs1_value >> rs2_value;
+				x[rd]             = *(uint64_t *)&result;
 				break;
 			default:
 				assert(false);
@@ -502,7 +503,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x6: // or_rem
 			switch (upper) {
 			case 0x00: // or
-				registers[rd] = registers[rs1] | registers[rs2];
+				x[rd] = x[rs1] | x[rs2];
 				break;
 			case 0x01: // rem
 				assert(false);
@@ -512,7 +513,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x7: // and_remu
 			switch (upper) {
 			case 0x00: // and
-				registers[rd] = registers[rs1] & registers[rs2];
+				x[rd] = x[rs1] & x[rs2];
 				break;
 			case 0x01: // remu
 				assert(false);
@@ -542,31 +543,31 @@ static void opcode_addw_subw_sllw_srlw_sraw(uint32_t instruction) {
 
 			switch (upper) {
 			case 0x00: // addw
-				registers[rd] = sign_extend64((registers[rs1] + registers[rs2]) & 0xffffffff, 32);
+				x[rd] = sign_extend64((x[rs1] + x[rs2]) & 0xffffffff, 32);
 				break;
 			case 0x30: // subw
-				registers[rd] = sign_extend64((registers[rs1] - registers[rs2]) & 0xffffffff, 32);
+				x[rd] = sign_extend64((x[rs1] - x[rs2]) & 0xffffffff, 32);
 				break;
 			}
 			break;
 		}
 		case 0x1: // sllw
-			registers[rd] = sign_extend64((registers[rs1] << (registers[rs2] & 0x1f)) & 0xffffffff, 32);
+			x[rd] = sign_extend64((x[rs1] << (x[rs2] & 0x1f)) & 0xffffffff, 32);
 			break;
 		case 0x5: { // srlw_sraw
 			uint8_t upper = (instruction >> 25) & 0x7f;
 
-			uint8_t y = registers[rs2] & 0x1f;
+			uint8_t rs2_value = x[rs2] & 0x1f;
 
 			switch (upper) {
 			case 0x0: // srlw
-				registers[rd] = sign_extend64((registers[rs1] & 0xffffffff) >> y, 32);
+				x[rd] = sign_extend64((x[rs1] & 0xffffffff) >> rs2_value, 32);
 				break;
 			case 0x20: { // sraw
-				uint64_t reg1   = registers[rs1] & 0xffffffff;
-				int32_t  x      = *(int32_t *)&reg1;
-				int32_t  result = x >> y;
-				registers[rd]   = sign_extend64(result, 32);
+				uint64_t reg1      = x[rs1] & 0xffffffff;
+				int32_t  rs1_value = *(int32_t *)&reg1;
+				int32_t  result    = rs1_value >> rs2_value;
+				x[rd]              = sign_extend64(result, 32);
 				break;
 			}
 			}
