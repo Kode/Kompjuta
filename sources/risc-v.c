@@ -582,6 +582,54 @@ static void opcode_addw_subw_sllw_srlw_sraw(uint32_t instruction) {
 	increment_pc();
 }
 
+static void opcode_flw(uint32_t instruction) {
+	uint8_t  rs1    = (instruction >> 15) & 0x1f;
+	uint8_t  rd     = (instruction >> 7) & 0x1f;
+	uint16_t offset = instruction >> 20;
+	uint8_t  middle = (instruction >> 12) & 0x7;
+
+	switch (middle) {
+	case 0x2: { // flw
+		uint32_t memory_value = read_memory32(x[rs1] + sign_extend64(offset, 12));
+		float    float_value;
+		memcpy(&float_value, &memory_value, sizeof(uint32_t));
+		f[rd] = (double)float_value;
+		break;
+	}
+	default:
+		assert(false);
+		break;
+	}
+
+	increment_pc();
+}
+
+static void opcode_fsw(uint32_t instruction) {
+	uint8_t middle = (instruction >> 12) & 0x7;
+
+	uint8_t  offset0 = (instruction >> 7) & 0x1f;
+	uint8_t  offset1 = instruction >> 25;
+	uint16_t offset  = (offset1 << 5) | offset0;
+
+	uint8_t rs1 = (instruction >> 15) & 0x1f;
+	uint8_t rs2 = (instruction >> 20) & 0x1f;
+
+	switch (middle) {
+	case 0x2: { // fsw
+		float    float_value = (float)f[rs2];
+		uint32_t value;
+		memcpy(&value, &float_value, sizeof(uint32_t));
+		store_memory32(x[rs1] + sign_extend64(offset, 12), value);
+		break;
+	}
+	default:
+		assert(false);
+		break;
+	}
+
+	increment_pc();
+}
+
 static void opcode_fence_fencei(uint32_t instruction) {
 	increment_pc();
 }
@@ -599,7 +647,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_flw,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented, // 10
@@ -631,7 +679,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_fsw,
     &opcode_not_implemented, // 40
     &opcode_not_implemented,
     &opcode_not_implemented,
@@ -970,7 +1018,52 @@ static const int width  = 800;
 static const int height = 600;
 
 static void execute_command_list(void) {
-	command_list_present = true;
+	kompjuta_gpu_command *commands = (kompjuta_gpu_command *)&ram[command_list_address];
+
+	for (uint32_t command_index = 0; command_index < command_list_size; ++command_index) {
+		kompjuta_gpu_command *command = &commands[command_index];
+		switch (command->kind) {
+		case KOMPJUTA_GPU_COMMAND_CLEAR: {
+			kore_gpu_texture *gpu_framebuffer = kore_gpu_device_get_framebuffer(&device);
+
+			kore_gpu_color clear_color = {
+			    .r = command->data.clear.r,
+			    .g = command->data.clear.g,
+			    .b = command->data.clear.b,
+			    .a = command->data.clear.a,
+			};
+
+			kore_gpu_render_pass_parameters parameters = {
+			    .color_attachments_count = 1,
+			    .color_attachments =
+			        {
+			            {
+			                .load_op     = KORE_GPU_LOAD_OP_CLEAR,
+			                .clear_value = clear_color,
+			                .texture =
+			                    {
+			                        .texture           = gpu_framebuffer,
+			                        .array_layer_count = 1,
+			                        .mip_level_count   = 1,
+			                        .format            = kore_gpu_device_framebuffer_format(&device),
+			                        .dimension         = KORE_GPU_TEXTURE_VIEW_DIMENSION_2D,
+			                    },
+			            },
+			        },
+			};
+			kore_gpu_command_list_begin_render_pass(&list, &parameters);
+
+			kore_gpu_command_list_end_render_pass(&list);
+			break;
+		}
+		case KOMPJUTA_GPU_COMMAND_PRESENT:
+			kore_gpu_command_list_present(&list);
+			command_list_present = true;
+			break;
+		}
+	}
+
+	kore_gpu_device_execute_command_list(&device, &list);
 }
 
 static void update(void *data) {
@@ -1041,6 +1134,8 @@ static void update(void *data) {
 
 		framebuffer_present = false;
 	}
+
+	command_list_present = false;
 }
 
 int kickstart(int argc, char **argv) {
