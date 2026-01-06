@@ -1026,7 +1026,8 @@ static void update(void *data) {
 }
 
 int kickstart(int argc, char **argv) {
-	FILE *file = fopen("framebuffer.elf", "rb");
+	assert(argc == 2);
+	FILE *file = fopen(argv[1], "rb");
 	fseek(file, 0, SEEK_END);
 	uint32_t size = ftell(file);
 	fseek(file, 0, 0);
