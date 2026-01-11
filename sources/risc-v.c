@@ -52,6 +52,12 @@ static uint64_t command_list_address = 0;
 
 #define MEMORY_SIZE 1024 * 1024 * 1024
 
+bool v0_bit(uint16_t lane) {
+	uint32_t byte = lane >> 3;
+	uint32_t bit  = lane & 7;
+	return (v[0].values.u8[byte] >> bit) & 1;
+}
+
 uint32_t read_memory8(uint64_t address) {
 	if (address >= MMIO_BASE) {
 		return 0;
@@ -721,21 +727,19 @@ static void opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret
 }
 
 static void opcode_vector(uint32_t instruction) {
-	uint8_t middle = (instruction >> 12) & 0x7;
+	uint8_t funct3 = (instruction >> 12) & 0x7;
 
-	switch (middle) {
+	switch (funct3) {
 	case 0x2: // vmv
 		assert(false);
 		break;
 	case 0x4: { // vslideup_vslidedown_vmerge_vmv
-		uint8_t upper = instruction >> 26;
-		switch (upper) {
+		uint8_t funct6 = instruction >> 26;
+		switch (funct6) {
 		case 0x17: { // vmerge_vmv
 			uint8_t rs1  = (instruction >> 15) & 0x1f;
 			uint8_t vd   = (instruction >> 7) & 0x1f;
 			uint8_t mask = (instruction >> 25) & 0x1;
-
-			assert(mask == 1);
 
 			uint16_t left = vl;
 
@@ -748,7 +752,9 @@ static void opcode_vector(uint32_t instruction) {
 							break;
 						}
 
-						v[reg].values.u8[element] = value;
+						if (mask == 1 || v0_bit(element + (128 / lmuldiv) * (reg - vd))) {
+							v[reg].values.u8[element] = value;
+						}
 						--left;
 					}
 					break;
@@ -759,7 +765,9 @@ static void opcode_vector(uint32_t instruction) {
 							break;
 						}
 
-						v[reg].values.u32[element] = value;
+						if (mask == 1 || v0_bit(element + (32 / lmuldiv) * (reg - vd))) {
+							v[reg].values.u32[element] = value;
+						}
 						--left;
 					}
 					break;
@@ -778,8 +786,24 @@ static void opcode_vector(uint32_t instruction) {
 		}
 		break;
 	}
-	case 0x6: {
-		assert(false);
+	case 0x6: { // OPMVX
+		uint8_t funct6 = instruction >> 26;
+		switch (funct6) {
+		case 0x10: { // VRXUNARY0
+			uint8_t vs2 = (instruction >> 20) & 0x1f;
+			assert(vs2 == 0); // vmv.s.x
+
+			uint8_t rs1 = (instruction >> 15) & 0x1f;
+			uint8_t vd  = (instruction >> 7) & 0x1f;
+
+			switch (sew) {
+			case 32: {
+				v[vd].values.u32[0] = x[rs1];
+				break;
+			}
+			}
+		}
+		}
 		break;
 	}
 	case 0x7: { // vsetvli_vsetivli_vsetvl
