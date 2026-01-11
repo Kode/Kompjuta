@@ -415,7 +415,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 			case 0x00: // add
 				x[rd] = x[rs1] + x[rs2];
 				break;
-			case 0x30: // sub
+			case 0x20: // sub
 				x[rd] = x[rs1] - x[rs2];
 				break;
 			case 0x01: { // mul
