@@ -14,9 +14,14 @@
 
 #include "mmio.h"
 
+typedef struct vector {
+	float values[32];
+} vector;
+
 uint8_t        *ram   = NULL;
 static uint64_t x[32] = {0};
 static double   f[32] = {0};
+static vector   v[32] = {0};
 static uint64_t pc    = 0x0;
 typedef void    opcode_func(uint32_t instruction);
 opcode_func    *opcodes[];
@@ -486,7 +491,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 				x[rd] = x[rs1] >> rs2_value;
 				break;
 			case 0x01: // divu
-				assert(false);
+				x[rd] = x[rs1] / x[rs2];
 				break;
 			case 0x20: { // sra
 				int64_t rs1_value = *(int64_t *)&x[rs1];
@@ -634,6 +639,63 @@ static void opcode_fence_fencei(uint32_t instruction) {
 	increment_pc();
 }
 
+static void opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret_wfi_sfencevma(uint32_t instruction) {
+	uint8_t middle = (instruction >> 12) & 0x7;
+
+	switch (middle) {
+	case 0x00: // ecall_ebreak_sret_mret_wfi_sfencevma
+		assert(false);
+		break;
+	case 0x01: // csrrw
+		assert(false);
+		break;
+	case 0x02: { // csrrs
+		uint8_t  rs1 = (instruction >> 15) & 0x1f;
+		uint8_t  rd  = (instruction >> 7) & 0x1f;
+		uint16_t csr = instruction >> 20;
+
+		assert(csr == 0xc22); // CSR_VLENB
+
+		const uint64_t csr_vlenb = 128;
+
+		x[rd] = csr_vlenb;
+
+		break;
+	}
+	case 0x03: // csrrc
+		assert(false);
+		break;
+	case 0x05: // csrrwi
+		assert(false);
+		break;
+	case 0x06: // csrrsi
+		assert(false);
+		break;
+	case 0x07: // csrrci
+		assert(false);
+		break;
+	default:
+		assert(false);
+	}
+
+	increment_pc();
+}
+
+static void opcode_vsetvli_vsetivli_vsetvl(uint32_t instruction) {
+	uint8_t upper = instruction >> 31;
+	if (upper == 0) { // vsetvli
+		uint16_t zimm = (instruction >> 20) & 0x7ff;
+		uint8_t  rs1  = (instruction >> 15) & 0x1f;
+		uint8_t  rd   = (instruction >> 7) & 0x1f;
+
+		assert(false);
+	}
+	else {
+		assert(false);
+	}
+	increment_pc();
+}
+
 static void opcode_not_implemented(uint32_t instruction) {
 	assert(false);
 	increment_pc();
@@ -727,7 +789,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_vsetvli_vsetivli_vsetvl,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented, // 90
@@ -755,7 +817,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_not_implemented,
+    &opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret_wfi_sfencevma,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
