@@ -15,16 +15,30 @@
 #include "mmio.h"
 
 typedef struct vector {
-	float values[32];
+	union {
+		uint8_t  u8[128];
+		uint16_t u16[64];
+		uint32_t u32[32];
+		uint64_t u64[16];
+		float    f32[32];
+		double   f64[16];
+	} values;
 } vector;
 
-uint8_t        *ram   = NULL;
+uint8_t *ram = NULL;
+
 static uint64_t x[32] = {0};
 static double   f[32] = {0};
 static vector   v[32] = {0};
-static uint64_t pc    = 0x0;
-typedef void    opcode_func(uint32_t instruction);
-opcode_func    *opcodes[];
+
+static uint64_t pc      = 0x0;
+static uint8_t  sew     = 0x0;
+static uint8_t  lmul    = 0x0;
+static uint8_t  lmuldiv = 0x0;
+static uint16_t vl      = 0x0;
+
+typedef void opcode_func(uint32_t instruction);
+opcode_func *opcodes[];
 
 static bool     framebuffer_present = false;
 static uint32_t framebuffer_width   = 0;
@@ -620,6 +634,31 @@ static void opcode_fsw(uint32_t instruction) {
 	uint8_t rs2 = (instruction >> 20) & 0x1f;
 
 	switch (middle) {
+	case 0x0: { // vs<nf>r
+		uint8_t nf;
+		switch (instruction >> 29) {
+		case 0x0:
+			nf = 1;
+			break;
+		case 0x1:
+			nf = 2;
+			break;
+		case 0x3:
+			nf = 4;
+			break;
+		case 0x7:
+			nf = 8;
+			break;
+		}
+
+		uint8_t vs3 = (instruction >> 7) & 0x17;
+
+		for (uint8_t reg = vs3; reg < vs3 + lmul; ++reg) {
+			memcpy(&ram[rs1 + (reg - vs3)], &v[reg].values.u8[0], 128);
+		}
+
+		break;
+	}
 	case 0x2: { // fsw
 		float    float_value = (float)f[rs2];
 		uint32_t value;
@@ -681,18 +720,237 @@ static void opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret
 	increment_pc();
 }
 
-static void opcode_vsetvli_vsetivli_vsetvl(uint32_t instruction) {
-	uint8_t upper = instruction >> 31;
-	if (upper == 0) { // vsetvli
-		uint16_t zimm = (instruction >> 20) & 0x7ff;
-		uint8_t  rs1  = (instruction >> 15) & 0x1f;
-		uint8_t  rd   = (instruction >> 7) & 0x1f;
+static void opcode_vector(uint32_t instruction) {
+	uint8_t middle = (instruction >> 12) & 0x7;
 
+	switch (middle) {
+	case 0x2: // vmv
 		assert(false);
+		break;
+	case 0x4: { // vslideup_vslidedown_vmerge_vmv
+		uint8_t upper = instruction >> 26;
+		switch (upper) {
+		case 0x17: { // vmerge_vmv
+			uint8_t rs1  = (instruction >> 15) & 0x1f;
+			uint8_t vd   = (instruction >> 7) & 0x1f;
+			uint8_t mask = (instruction >> 25) & 0x1;
+
+			assert(mask == 1);
+
+			uint16_t left = vl;
+
+			for (uint8_t reg = vd; reg < vd + lmul; ++reg) {
+				switch (sew) {
+				case 8: {
+					uint8_t value = (uint8_t)x[rs1];
+					for (uint16_t element = 0; element < 128 / lmuldiv; ++element) {
+						if (left == 0) {
+							break;
+						}
+
+						v[reg].values.u8[element] = value;
+						--left;
+					}
+					break;
+				case 32: {
+					uint32_t value = (uint32_t)x[rs1];
+					for (uint16_t element = 0; element < 32 / lmuldiv; ++element) {
+						if (left == 0) {
+							break;
+						}
+
+						v[reg].values.u32[element] = value;
+						--left;
+					}
+					break;
+				}
+				}
+				default:
+					assert(false);
+					break;
+				}
+			}
+			break;
+		}
+		default:
+			assert(false);
+			break;
+		}
+		break;
 	}
-	else {
+	case 0x6: {
 		assert(false);
+		break;
 	}
+	case 0x7: { // vsetvli_vsetivli_vsetvl
+		uint8_t upper = instruction >> 31;
+		if (upper == 0) { // vsetvli
+			uint16_t zimm = (instruction >> 20) & 0x7ff;
+			uint8_t  rs1  = (instruction >> 15) & 0x1f;
+			uint8_t  rd   = (instruction >> 7) & 0x1f;
+
+			uint8_t vlmul = zimm & 0x7;
+			uint8_t vsew  = (zimm >> 3) & 0x7;
+			uint8_t vta   = (zimm >> 6) & 0x1;
+			uint8_t vma   = (zimm >> 7) & 0x1;
+
+			switch (vsew) {
+			case 0x0:
+				sew = 8;
+				break;
+			case 0x1:
+				sew = 16;
+				break;
+			case 0x2:
+				sew = 32;
+				break;
+			case 0x3:
+				sew = 64;
+				break;
+			default:
+				assert(false);
+				break;
+			}
+
+			switch (vlmul) {
+			case 0x0:
+				lmul    = 1;
+				lmuldiv = 1;
+				break;
+			case 0x1:
+				lmul    = 2;
+				lmuldiv = 1;
+				break;
+			case 0x2:
+				lmul    = 4;
+				lmuldiv = 1;
+				break;
+			case 0x3:
+				lmul    = 8;
+				lmuldiv = 1;
+				break;
+			case 0x5:
+				lmul    = 1;
+				lmuldiv = 8;
+				break;
+			case 0x6:
+				lmul    = 1;
+				lmuldiv = 4;
+				break;
+			case 0x7:
+				lmul    = 1;
+				lmuldiv = 2;
+				break;
+			default:
+				assert(false);
+				break;
+			}
+
+			uint16_t avl = 0;
+
+			if (rs1 != 0) {
+				avl = (uint16_t)x[rs1];
+			}
+			else if (rd != 0) {
+				avl = ~0;
+			}
+			else {
+				avl = vl;
+			}
+
+			uint16_t vlen  = 1024;
+			uint16_t vlmax = (vlen / sew) * lmul / lmuldiv;
+			vl             = min(avl, vlmax);
+
+			if (rd != 0) {
+				x[rd] = vl;
+			}
+		}
+		else {
+			if (((instruction >> 30) & 0x1) == 1) { // vsetivli
+				uint16_t zimm = (instruction >> 20) & 0x3ff;
+				uint8_t  uimm = (instruction >> 15) & 0x1f;
+				uint8_t  rd   = (instruction >> 7) & 0x1f;
+
+				uint8_t vlmul = zimm & 0x7;
+				uint8_t vsew  = (zimm >> 3) & 0x7;
+				uint8_t vta   = (zimm >> 6) & 0x1;
+				uint8_t vma   = (zimm >> 7) & 0x1;
+
+				switch (vsew) {
+				case 0x0:
+					sew = 8;
+					break;
+				case 0x1:
+					sew = 16;
+					break;
+				case 0x2:
+					sew = 32;
+					break;
+				case 0x3:
+					sew = 64;
+					break;
+				default:
+					assert(false);
+					break;
+				}
+
+				switch (vlmul) {
+				case 0x0:
+					lmul    = 1;
+					lmuldiv = 1;
+					break;
+				case 0x1:
+					lmul    = 2;
+					lmuldiv = 1;
+					break;
+				case 0x2:
+					lmul    = 4;
+					lmuldiv = 1;
+					break;
+				case 0x3:
+					lmul    = 8;
+					lmuldiv = 1;
+					break;
+				case 0x5:
+					lmul    = 1;
+					lmuldiv = 8;
+					break;
+				case 0x6:
+					lmul    = 1;
+					lmuldiv = 4;
+					break;
+				case 0x7:
+					lmul    = 1;
+					lmuldiv = 2;
+					break;
+				default:
+					assert(false);
+					break;
+				}
+
+				uint16_t avl = uimm;
+
+				uint16_t vlen  = 1024;
+				uint16_t vlmax = (vlen / sew) * lmul / lmuldiv;
+				vl             = min(avl, vlmax);
+
+				if (rd != 0) {
+					x[rd] = vl;
+				}
+			}
+			else { // vsetvl
+				assert(false);
+			}
+		}
+
+		break;
+	}
+	default:
+		assert(false);
+		break;
+	}
+
 	increment_pc();
 }
 
@@ -789,7 +1047,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_vsetvli_vsetivli_vsetvl,
+    &opcode_vector,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented, // 90
