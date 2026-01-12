@@ -798,7 +798,7 @@ static void opcode_vector(uint32_t instruction) {
 
 			switch (sew) {
 			case 32: {
-				v[vd].values.u32[0] = x[rs1];
+				v[vd].values.u32[0] = (uint32_t)x[rs1];
 				break;
 			}
 			}
