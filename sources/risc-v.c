@@ -640,27 +640,76 @@ static void opcode_fsw(uint32_t instruction) {
 	uint8_t rs2 = (instruction >> 20) & 0x1f;
 
 	switch (middle) {
-	case 0x0: { // vs<nf>r
-		uint8_t nf;
-		switch (instruction >> 29) {
-		case 0x0:
-			nf = 1;
-			break;
-		case 0x1:
-			nf = 2;
-			break;
-		case 0x3:
-			nf = 4;
-			break;
-		case 0x7:
-			nf = 8;
+	case 0x0:
+	case 0x5:
+	case 0x6:
+	case 0x7: { // vs<eew>_vs<nf>r
+		uint8_t funct = (instruction >> 20) & 0x1f;
+		switch (funct) {
+		case 0x0: { // vs<eew>
+			uint8_t vs3 = offset0;
+
+			uint8_t mask = (instruction >> 25) & 0x1;
+			assert(mask == 0x1);
+
+			assert(lmul == 1);
+
+			uint8_t width = (instruction >> 12) & 0x7;
+			switch (width) {
+			case 0x0: // 8 bit
+				assert(false);
+				break;
+			case 0x5: // 16 bit
+				assert(false);
+				break;
+			case 0x6: { // 32 bit
+				assert(sew == 32);
+
+				uint64_t base = x[rs1];
+
+				for (uint16_t i = 0; i < vl; ++i) {
+					*(uint32_t *)(&ram[base + 4 * i]) = v[vs3].values.u32[i];
+				}
+
+				break;
+			}
+			case 0x7: // 64 bit
+				assert(false);
+				break;
+			}
+
 			break;
 		}
+		case 0x8: { // vs<nf>r
+			assert(middle == 0x0);
 
-		uint8_t vs3 = (instruction >> 7) & 0x17;
+			uint8_t nf;
+			switch (instruction >> 29) {
+			case 0x0:
+				nf = 1;
+				break;
+			case 0x1:
+				nf = 2;
+				break;
+			case 0x3:
+				nf = 4;
+				break;
+			case 0x7:
+				nf = 8;
+				break;
+			}
 
-		for (uint8_t reg = vs3; reg < vs3 + lmul; ++reg) {
-			memcpy(&ram[rs1 + (reg - vs3)], &v[reg].values.u8[0], 128);
+			uint8_t vs3 = (instruction >> 7) & 0x17;
+
+			for (uint8_t reg = vs3; reg < vs3 + lmul; ++reg) {
+				memcpy(&ram[rs1 + (reg - vs3)], &v[reg].values.u8[0], 128);
+			}
+
+			break;
+		}
+		default:
+			assert(false);
+			break;
 		}
 
 		break;
