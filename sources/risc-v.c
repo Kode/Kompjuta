@@ -652,8 +652,6 @@ static void opcode_fsw(uint32_t instruction) {
 			uint8_t mask = (instruction >> 25) & 0x1;
 			assert(mask == 0x1);
 
-			assert(lmul == 1);
-
 			uint8_t width = (instruction >> 12) & 0x7;
 			switch (width) {
 			case 0x0: // 8 bit
@@ -667,14 +665,25 @@ static void opcode_fsw(uint32_t instruction) {
 
 				uint64_t base = x[rs1];
 
-				for (uint16_t i = 0; i < vl; ++i) {
-					*(uint32_t *)(&ram[base + 4 * i]) = v[vs3].values.u32[i];
+				for (uint8_t reg_offset = 0; reg_offset < lmul; ++reg_offset) {
+					for (uint16_t i = 0; i < vl / lmuldiv; ++i) {
+						*(uint32_t *)(&ram[base + reg_offset * vl * 4 + 4 * i]) = v[vs3 + reg_offset].values.u32[i];
+					}
 				}
 
 				break;
 			}
 			case 0x7: // 64 bit
-				assert(false);
+				assert(sew == 64);
+
+				uint64_t base = x[rs1];
+
+				for (uint8_t reg_offset = 0; reg_offset < lmul; ++reg_offset) {
+					for (uint16_t i = 0; i < vl / lmuldiv; ++i) {
+						*(uint64_t *)(&ram[base + reg_offset * vl * 8 + 8 * i]) = v[vs3 + reg_offset].values.u64[i];
+					}
+				}
+
 				break;
 			}
 
@@ -782,6 +791,89 @@ static void opcode_vector(uint32_t instruction) {
 	case 0x2: // vmv
 		assert(false);
 		break;
+	case 0x3: { // OPIVI
+		uint8_t funct6 = instruction >> 26;
+		switch (funct6) {
+		case 0x17: { // vmerge_vmv
+			uint8_t vs2  = (instruction >> 20) & 0x1f;
+			uint8_t vd   = (instruction >> 7) & 0x1f;
+			uint8_t imm  = (instruction >> 15) & 0x1f;
+			uint8_t mask = (instruction >> 25) & 0x1;
+
+			uint16_t left = vl;
+
+			for (uint8_t reg = vd; reg < vd + lmul; ++reg) {
+				switch (sew) {
+				case 8: {
+					uint8_t value = (uint8_t)imm;
+
+					for (uint16_t element = 0; element < 128 / lmuldiv; ++element) {
+						if (left == 0) {
+							break;
+						}
+
+						if (mask == 1 || v0_bit(element + (128 / lmuldiv) * (reg - vd))) {
+							v[reg].values.u8[element] = value;
+						}
+						else {
+							assert(lmul == 1);
+							v[reg].values.u8[element] = v[vs2].values.u8[element];
+						}
+						--left;
+					}
+					break;
+				}
+				case 32: {
+					uint32_t value = (uint32_t)imm;
+
+					for (uint16_t element = 0; element < 32 / lmuldiv; ++element) {
+						if (left == 0) {
+							break;
+						}
+
+						if (mask == 1 || v0_bit(element + (32 / lmuldiv) * (reg - vd))) {
+							v[reg].values.u32[element] = value;
+						}
+						else {
+							assert(lmul == 1);
+							v[reg].values.u32[element] = v[vs2].values.u32[element];
+						}
+						--left;
+					}
+					break;
+				}
+				case 64: {
+					uint64_t value = (uint64_t)imm;
+
+					for (uint16_t element = 0; element < 16 / lmuldiv; ++element) {
+						if (left == 0) {
+							break;
+						}
+
+						if (mask == 1 || v0_bit(element + (16 / lmuldiv) * (reg - vd))) {
+							v[reg].values.u64[element] = value;
+						}
+						else {
+							assert(lmul == 1);
+							v[reg].values.u64[element] = v[vs2].values.u64[element];
+						}
+						--left;
+					}
+					break;
+				}
+				default:
+					assert(false);
+					break;
+				}
+			}
+			break;
+		}
+		default:
+			assert(false);
+			break;
+		}
+		break;
+	}
 	case 0x4: { // vslideup_vslidedown_vmerge_vmv
 		uint8_t funct6 = instruction >> 26;
 		switch (funct6) {
@@ -807,6 +899,7 @@ static void opcode_vector(uint32_t instruction) {
 						--left;
 					}
 					break;
+				}
 				case 32: {
 					uint32_t value = (uint32_t)x[rs1];
 					for (uint16_t element = 0; element < 32 / lmuldiv; ++element) {
@@ -820,7 +913,6 @@ static void opcode_vector(uint32_t instruction) {
 						--left;
 					}
 					break;
-				}
 				}
 				default:
 					assert(false);
@@ -850,8 +942,15 @@ static void opcode_vector(uint32_t instruction) {
 				v[vd].values.u32[0] = (uint32_t)x[rs1];
 				break;
 			}
+			default:
+				assert(false);
+				break;
 			}
+			break;
 		}
+		default:
+			assert(false);
+			break;
 		}
 		break;
 	}
