@@ -363,6 +363,7 @@ static void opcode_jal(uint32_t instruction) {
 	    ((instruction >> 31) & 0x1) << 20 | ((instruction >> 21) & 0x3ff) << 1 | ((instruction >> 20) & 0x1) << 11 | ((instruction >> 12) & 0xff) << 12;
 
 	pc += sign_extend64(immediate, 21);
+	assert(pc != 0);
 }
 
 static void opcode_jalr(uint32_t instruction) {
@@ -370,8 +371,10 @@ static void opcode_jalr(uint32_t instruction) {
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 	uint16_t immediate = (instruction >> 20) & 0xfff;
 
-	uint64_t t = pc + 4;
-	pc         = (x[rs1] + sign_extend64(immediate, 12)) & ~1;
+	uint64_t t      = pc + 4;
+	uint64_t nextpc = (x[rs1] + sign_extend64(immediate, 12)) & ~1;
+	assert(nextpc != 0);
+	pc = nextpc;
 
 	if (rd != 0) {
 		x[rd] = t;
@@ -419,6 +422,7 @@ static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
 		uint32_t immediate =
 		    (((instruction >> 31) & 0x1) << 12) | (((instruction >> 25) & 0x3f) << 5) | (((instruction >> 8) & 0xf) << 1) | (((instruction >> 7) & 0x1) << 11);
 		pc += sign_extend64(immediate, 13);
+		assert(pc != 0);
 	}
 	else {
 		increment_pc();
@@ -665,10 +669,8 @@ static void opcode_fsw(uint32_t instruction) {
 
 				uint64_t base = x[rs1];
 
-				for (uint8_t reg_offset = 0; reg_offset < lmul; ++reg_offset) {
-					for (uint16_t i = 0; i < vl / lmuldiv; ++i) {
-						*(uint32_t *)(&ram[base + reg_offset * vl * 4 + 4 * i]) = v[vs3 + reg_offset].values.u32[i];
-					}
+				for (uint16_t i = 0; i < vl; ++i) {
+					*(uint32_t *)(&ram[base + 4 * i]) = v[vs3].values.u32[i];
 				}
 
 				break;
@@ -678,10 +680,8 @@ static void opcode_fsw(uint32_t instruction) {
 
 				uint64_t base = x[rs1];
 
-				for (uint8_t reg_offset = 0; reg_offset < lmul; ++reg_offset) {
-					for (uint16_t i = 0; i < vl / lmuldiv; ++i) {
-						*(uint64_t *)(&ram[base + reg_offset * vl * 8 + 8 * i]) = v[vs3 + reg_offset].values.u64[i];
-					}
+				for (uint16_t i = 0; i < vl; ++i) {
+					*(uint64_t *)(&ram[base + 8 * i]) = v[vs3].values.u64[i];
 				}
 
 				break;
@@ -800,72 +800,51 @@ static void opcode_vector(uint32_t instruction) {
 			uint8_t imm  = (instruction >> 15) & 0x1f;
 			uint8_t mask = (instruction >> 25) & 0x1;
 
-			uint16_t left = vl;
+			switch (sew) {
+			case 8: {
+				uint8_t value = (uint8_t)imm;
 
-			for (uint8_t reg = vd; reg < vd + lmul; ++reg) {
-				switch (sew) {
-				case 8: {
-					uint8_t value = (uint8_t)imm;
-
-					for (uint16_t element = 0; element < 128 / lmuldiv; ++element) {
-						if (left == 0) {
-							break;
-						}
-
-						if (mask == 1 || v0_bit(element + (128 / lmuldiv) * (reg - vd))) {
-							v[reg].values.u8[element] = value;
-						}
-						else {
-							assert(lmul == 1);
-							v[reg].values.u8[element] = v[vs2].values.u8[element];
-						}
-						--left;
+				for (uint16_t element = 0; element < vl; ++element) {
+					if (mask == 1 || v0_bit(element)) {
+						v[vd].values.u8[element] = value;
 					}
-					break;
-				}
-				case 32: {
-					uint32_t value = (uint32_t)imm;
-
-					for (uint16_t element = 0; element < 32 / lmuldiv; ++element) {
-						if (left == 0) {
-							break;
-						}
-
-						if (mask == 1 || v0_bit(element + (32 / lmuldiv) * (reg - vd))) {
-							v[reg].values.u32[element] = value;
-						}
-						else {
-							assert(lmul == 1);
-							v[reg].values.u32[element] = v[vs2].values.u32[element];
-						}
-						--left;
+					else {
+						v[vd].values.u8[element] = v[vs2].values.u8[element];
 					}
-					break;
 				}
-				case 64: {
-					uint64_t value = (uint64_t)imm;
-
-					for (uint16_t element = 0; element < 16 / lmuldiv; ++element) {
-						if (left == 0) {
-							break;
-						}
-
-						if (mask == 1 || v0_bit(element + (16 / lmuldiv) * (reg - vd))) {
-							v[reg].values.u64[element] = value;
-						}
-						else {
-							assert(lmul == 1);
-							v[reg].values.u64[element] = v[vs2].values.u64[element];
-						}
-						--left;
-					}
-					break;
-				}
-				default:
-					assert(false);
-					break;
-				}
+				break;
 			}
+			case 32: {
+				uint32_t value = (uint32_t)imm;
+
+				for (uint16_t element = 0; element < vl; ++element) {
+					if (mask == 1 || v0_bit(element)) {
+						v[vd].values.u32[element] = value;
+					}
+					else {
+						v[vd].values.u32[element] = v[vs2].values.u32[element];
+					}
+				}
+				break;
+			}
+			case 64: {
+				uint64_t value = (uint64_t)imm;
+
+				for (uint16_t element = 0; element < vl; ++element) {
+					if (mask == 1 || v0_bit(element)) {
+						v[vd].values.u64[element] = value;
+					}
+					else {
+						v[vd].values.u64[element] = v[vs2].values.u64[element];
+					}
+				}
+				break;
+			}
+			default:
+				assert(false);
+				break;
+			}
+
 			break;
 		}
 		default:
@@ -882,43 +861,30 @@ static void opcode_vector(uint32_t instruction) {
 			uint8_t vd   = (instruction >> 7) & 0x1f;
 			uint8_t mask = (instruction >> 25) & 0x1;
 
-			uint16_t left = vl;
-
-			for (uint8_t reg = vd; reg < vd + lmul; ++reg) {
-				switch (sew) {
-				case 8: {
-					uint8_t value = (uint8_t)x[rs1];
-					for (uint16_t element = 0; element < 128 / lmuldiv; ++element) {
-						if (left == 0) {
-							break;
-						}
-
-						if (mask == 1 || v0_bit(element + (128 / lmuldiv) * (reg - vd))) {
-							v[reg].values.u8[element] = value;
-						}
-						--left;
+			switch (sew) {
+			case 8: {
+				uint8_t value = (uint8_t)x[rs1];
+				for (uint16_t element = 0; element < vl; ++element) {
+					if (mask == 1 || v0_bit(element)) {
+						v[vd].values.u8[element] = value;
 					}
-					break;
 				}
-				case 32: {
-					uint32_t value = (uint32_t)x[rs1];
-					for (uint16_t element = 0; element < 32 / lmuldiv; ++element) {
-						if (left == 0) {
-							break;
-						}
-
-						if (mask == 1 || v0_bit(element + (32 / lmuldiv) * (reg - vd))) {
-							v[reg].values.u32[element] = value;
-						}
-						--left;
-					}
-					break;
-				}
-				default:
-					assert(false);
-					break;
-				}
+				break;
 			}
+			case 32: {
+				uint32_t value = (uint32_t)x[rs1];
+				for (uint16_t element = 0; element < vl; ++element) {
+					if (mask == 1 || v0_bit(element)) {
+						v[vd].values.u32[element] = value;
+					}
+				}
+				break;
+			}
+			default:
+				assert(false);
+				break;
+			}
+
 			break;
 		}
 		default:
