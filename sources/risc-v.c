@@ -1478,6 +1478,12 @@ static const int height = 600;
 static void execute_command_list(void) {
 	kompjuta_gpu_command *commands = (kompjuta_gpu_command *)&ram[command_list_address];
 
+	void    *vertex_shader   = NULL;
+	void    *fragment_shader = NULL;
+	void    *index_data      = NULL;
+	void    *vertex_data     = NULL;
+	uint64_t vertex_stride   = 0;
+
 	for (uint32_t command_index = 0; command_index < command_list_size; ++command_index) {
 		kompjuta_gpu_command *command = &commands[command_index];
 		switch (command->kind) {
@@ -1514,6 +1520,19 @@ static void execute_command_list(void) {
 			kore_gpu_command_list_end_render_pass(&list);
 			break;
 		}
+		case KOMPJUTA_GPU_COMMAND_SET_INDEX_BUFFER:
+			index_data = command->data.set_index_buffer.data;
+			break;
+		case KOMPJUTA_GPU_COMMAND_SET_VERTEX_BUFFER:
+			vertex_data   = command->data.set_vertex_buffer.data;
+			vertex_stride = command->data.set_vertex_buffer.stride;
+			break;
+		case KOMPJUTA_GPU_COMMAND_SET_RENDER_PIPELINE:
+			vertex_shader   = command->data.set_render_pipeline.vertex_shader;
+			fragment_shader = command->data.set_render_pipeline.fragment_shader;
+			break;
+		case KOMPJUTA_GPU_COMMAND_DRAW_INDEXED:
+			break;
 		case KOMPJUTA_GPU_COMMAND_PRESENT:
 			kore_gpu_command_list_present(&list);
 			command_list_present = true;
