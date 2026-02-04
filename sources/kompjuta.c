@@ -27,17 +27,21 @@ typedef struct vector {
 
 uint8_t *ram = NULL;
 
-static uint64_t x[32] = {0};
-static double   f[32] = {0};
-static vector   v[32] = {0};
+typedef struct cpu_core {
+	uint64_t x[32];
+	double   f[32];
+	vector   v[32];
 
-static uint64_t pc      = 0x0;
-static uint8_t  sew     = 0x0;
-static uint8_t  lmul    = 0x0;
-static uint8_t  lmuldiv = 0x0;
-static uint16_t vl      = 0x0;
+	uint64_t pc;
+	uint8_t  sew;
+	uint8_t  lmul;
+	uint8_t  lmuldiv;
+	uint16_t vl;
+} cpu_core;
 
-typedef void opcode_func(uint32_t instruction);
+static cpu_core cpu = {0};
+
+typedef void opcode_func(cpu_core *core, uint32_t instruction);
 opcode_func *opcodes[];
 
 static bool     framebuffer_present = false;
@@ -52,10 +56,10 @@ static uint64_t command_list_address = 0;
 
 #define MEMORY_SIZE 1024 * 1024 * 1024
 
-bool v0_bit(uint16_t lane) {
+static bool v0_bit(cpu_core *core, uint16_t lane) {
 	uint32_t byte = lane >> 3;
 	uint32_t bit  = lane & 7;
-	return (v[0].values.u8[byte] >> bit) & 1;
+	return (core->v[0].values.u8[byte] >> bit) & 1;
 }
 
 uint32_t read_memory8(uint64_t address) {
@@ -156,14 +160,14 @@ void store_memory64(uint64_t address, uint64_t value) {
 	}
 }
 
-static void increment_pc(void) {
-	pc += 4;
+static void increment_pc(cpu_core *core) {
+	core->pc += 4;
 }
 
-static void execute_opcode(void) {
-	uint32_t instruction = *(uint32_t *)&ram[pc];
+static void execute_opcode(cpu_core *core) {
+	uint32_t instruction = *(uint32_t *)&ram[core->pc];
 	uint8_t  opcode      = instruction & 0x7f;
-	opcodes[opcode](instruction);
+	opcodes[opcode](core, instruction);
 }
 
 static uint32_t sign_extend32(uint32_t value, int bits) {
@@ -176,29 +180,29 @@ static uint64_t sign_extend64(uint64_t value, int bits) {
 	return (value ^ mask) - mask;
 }
 
-static void opcode_nop(uint32_t instruction) {
-	increment_pc();
+static void opcode_nop(cpu_core *core, uint32_t instruction) {
+	increment_pc(core);
 }
 
-static void opcode_lui(uint32_t instruction) {
+static void opcode_lui(cpu_core *core, uint32_t instruction) {
 	uint32_t immediate = instruction >> 12u;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 
-	x[rd] = sign_extend64(immediate << 12u, 32);
+	core->x[rd] = sign_extend64(immediate << 12u, 32);
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_auipc(uint32_t instruction) {
+static void opcode_auipc(cpu_core *core, uint32_t instruction) {
 	uint32_t immediate = instruction >> 12u;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 
-	x[rd] = pc + sign_extend64(immediate << 12u, 32);
+	core->x[rd] = core->pc + sign_extend64(immediate << 12u, 32);
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruction) {
+static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(cpu_core *core, uint32_t instruction) {
 	uint8_t  rs1       = (instruction >> 15) & 0x1f;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 	uint16_t immediate = instruction >> 20;
@@ -207,41 +211,41 @@ static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruc
 	uint8_t command = (instruction >> 12) & 0x7;
 	switch (command) {
 	case 0x0: // addi
-		x[rd] = x[rs1] + sign_extend64(immediate, 12);
+		core->x[rd] = core->x[rs1] + sign_extend64(immediate, 12);
 		break;
 	case 0x2: { // slti
 		uint64_t immediate_value = sign_extend64(immediate, 12);
 
-		int64_t rs1_value = *(int64_t *)&x[rs1];
+		int64_t rs1_value = *(int64_t *)&core->x[rs1];
 		int64_t rs2_value = *(int64_t *)&immediate_value;
 
-		x[rd] = (rs1_value < rs2_value) ? 1 : 0;
+		core->x[rd] = (rs1_value < rs2_value) ? 1 : 0;
 		break;
 	}
 	case 0x3: // sltiu
-		x[rd] = (x[rs1] < sign_extend64(immediate, 12)) ? 1 : 0;
+		core->x[rd] = (core->x[rs1] < sign_extend64(immediate, 12)) ? 1 : 0;
 		break;
 	case 0x4: // xori
-		x[rd] = x[rs1] ^ sign_extend64(immediate, 12);
+		core->x[rd] = core->x[rs1] ^ sign_extend64(immediate, 12);
 		break;
 	case 0x6: // ori
-		x[rd] = x[rs1] | sign_extend64(immediate, 12);
+		core->x[rd] = core->x[rs1] | sign_extend64(immediate, 12);
 		break;
 	case 0x7: // andi
-		x[rd] = x[rs1] & sign_extend64(immediate, 12);
+		core->x[rd] = core->x[rs1] & sign_extend64(immediate, 12);
 		break;
 	case 0x1: // slli
-		x[rd] = x[rs1] << shamt;
+		core->x[rd] = core->x[rs1] << shamt;
 		break;
 	case 0x5: { // srli_srai
 		uint8_t upper = instruction >> 26;
 		switch (upper) {
 		case 0x00: // srli
-			x[rd] = x[rs1] >> shamt;
+			core->x[rd] = core->x[rs1] >> shamt;
 			break;
 		case 0x10: { // srai
-			int64_t rs1_value = *(int64_t *)&x[rs1];
-			x[rd]             = rs1_value >> shamt;
+			int64_t rs1_value = *(int64_t *)&core->x[rs1];
+			core->x[rd]       = rs1_value >> shamt;
 			break;
 		}
 		default:
@@ -255,10 +259,10 @@ static void opcode_addi_slti_sltiu_xori_ori_andi_slli_srli_srai(uint32_t instruc
 		break;
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_lb_lh_lw_lbu_lhu_lwu_ld(uint32_t instruction) {
+static void opcode_lb_lh_lw_lbu_lhu_lwu_ld(cpu_core *core, uint32_t instruction) {
 	uint8_t  rs1    = (instruction >> 15) & 0x1f;
 	uint8_t  rd     = (instruction >> 7) & 0x1f;
 	uint16_t offset = instruction >> 20;
@@ -267,38 +271,38 @@ static void opcode_lb_lh_lw_lbu_lhu_lwu_ld(uint32_t instruction) {
 
 	switch (command) {
 	case 0x0: { // lb
-		uint8_t value = read_memory8(x[rs1] + sign_extend64(offset, 12));
-		x[rd]         = sign_extend64(value, 8);
+		uint8_t value = read_memory8(core->x[rs1] + sign_extend64(offset, 12));
+		core->x[rd]   = sign_extend64(value, 8);
 		break;
 	}
 	case 0x1: { // lh
-		uint16_t value = read_memory16(x[rs1] + sign_extend64(offset, 12));
-		x[rd]          = sign_extend64(value, 16);
+		uint16_t value = read_memory16(core->x[rs1] + sign_extend64(offset, 12));
+		core->x[rd]    = sign_extend64(value, 16);
 		break;
 	}
 	case 0x2: { // lw
-		uint32_t value = read_memory32(x[rs1] + sign_extend64(offset, 12));
-		x[rd]          = sign_extend64(value, 32);
+		uint32_t value = read_memory32(core->x[rs1] + sign_extend64(offset, 12));
+		core->x[rd]    = sign_extend64(value, 32);
 		break;
 	}
 	case 0x4: { // lbu
-		uint64_t value = read_memory8(x[rs1] + sign_extend64(offset, 12));
-		x[rd]          = value & 0xff;
+		uint64_t value = read_memory8(core->x[rs1] + sign_extend64(offset, 12));
+		core->x[rd]    = value & 0xff;
 		break;
 	}
 	case 0x5: { // lhu
-		uint64_t value = read_memory16(x[rs1] + sign_extend64(offset, 12));
-		x[rd]          = value & 0xffff;
+		uint64_t value = read_memory16(core->x[rs1] + sign_extend64(offset, 12));
+		core->x[rd]    = value & 0xffff;
 		break;
 	}
 	case 0x6: { // lwu
-		uint64_t value = read_memory32(x[rs1] + sign_extend64(offset, 12));
-		x[rd]          = value & 0xffffffff;
+		uint64_t value = read_memory32(core->x[rs1] + sign_extend64(offset, 12));
+		core->x[rd]    = value & 0xffffffff;
 		break;
 	}
 	case 0x3: { // ld
-		uint64_t value = read_memory64(x[rs1] + sign_extend64(offset, 12));
-		x[rd]          = value;
+		uint64_t value = read_memory64(core->x[rs1] + sign_extend64(offset, 12));
+		core->x[rd]    = value;
 		break;
 	}
 	default:
@@ -306,22 +310,22 @@ static void opcode_lb_lh_lw_lbu_lhu_lwu_ld(uint32_t instruction) {
 		break;
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_addiw(uint32_t instruction) {
+static void opcode_addiw(cpu_core *core, uint32_t instruction) {
 	uint8_t  rs1       = (instruction >> 15) & 0x1f;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 	uint16_t immediate = instruction >> 20u;
 
-	uint32_t rs1_value = (uint32_t)x[rs1];
+	uint32_t rs1_value = (uint32_t)core->x[rs1];
 	uint32_t result    = rs1_value + sign_extend32(immediate, 12);
-	x[rd]              = sign_extend64(result, 32);
+	core->x[rd]        = sign_extend64(result, 32);
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_sb_sh_sw_sd(uint32_t instruction) {
+static void opcode_sb_sh_sw_sd(cpu_core *core, uint32_t instruction) {
 	uint8_t rs1 = (instruction >> 15) & 0x1f;
 	uint8_t rs2 = (instruction >> 20) & 0x1f;
 
@@ -333,55 +337,55 @@ static void opcode_sb_sh_sw_sd(uint32_t instruction) {
 
 	switch (command) {
 	case 0x0: // sb
-		store_memory8(x[rs1] + sign_extend64(immediate, 12), *(uint8_t *)&x[rs2]);
+		store_memory8(core->x[rs1] + sign_extend64(immediate, 12), *(uint8_t *)&core->x[rs2]);
 		break;
 	case 0x1: // sh
-		store_memory16(x[rs1] + sign_extend64(immediate, 12), *(uint16_t *)&x[rs2]);
+		store_memory16(core->x[rs1] + sign_extend64(immediate, 12), *(uint16_t *)&core->x[rs2]);
 		break;
 	case 0x2: // sw
-		store_memory32(x[rs1] + sign_extend64(immediate, 12), *(uint32_t *)&x[rs2]);
+		store_memory32(core->x[rs1] + sign_extend64(immediate, 12), *(uint32_t *)&core->x[rs2]);
 		break;
 	case 0x3: // sd
-		store_memory64(x[rs1] + sign_extend64(immediate, 12), x[rs2]);
+		store_memory64(core->x[rs1] + sign_extend64(immediate, 12), core->x[rs2]);
 		break;
 	default:
 		assert(false);
 		break;
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_jal(uint32_t instruction) {
+static void opcode_jal(cpu_core *core, uint32_t instruction) {
 	uint8_t rd = (instruction >> 7) & 0x1f;
 
 	if (rd != 0) {
-		x[rd] = pc + 4;
+		core->x[rd] = core->pc + 4;
 	}
 
 	uint32_t immediate =
 	    ((instruction >> 31) & 0x1) << 20 | ((instruction >> 21) & 0x3ff) << 1 | ((instruction >> 20) & 0x1) << 11 | ((instruction >> 12) & 0xff) << 12;
 
-	pc += sign_extend64(immediate, 21);
-	assert(pc != 0);
+	core->pc += sign_extend64(immediate, 21);
+	assert(core->pc != 0);
 }
 
-static void opcode_jalr(uint32_t instruction) {
+static void opcode_jalr(cpu_core *core, uint32_t instruction) {
 	uint8_t  rs1       = (instruction >> 15) & 0x1f;
 	uint8_t  rd        = (instruction >> 7) & 0x1f;
 	uint16_t immediate = (instruction >> 20) & 0xfff;
 
-	uint64_t t      = pc + 4;
-	uint64_t nextpc = (x[rs1] + sign_extend64(immediate, 12)) & ~1;
+	uint64_t t      = core->pc + 4;
+	uint64_t nextpc = (core->x[rs1] + sign_extend64(immediate, 12)) & ~1;
 	assert(nextpc != 0);
-	pc = nextpc;
+	core->pc = nextpc;
 
 	if (rd != 0) {
-		x[rd] = t;
+		core->x[rd] = t;
 	}
 }
 
-static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
+static void opcode_beq_bne_blt_bge_bltu_bgeu(cpu_core *core, uint32_t instruction) {
 	uint8_t rs1 = (instruction >> 15) & 0x1f;
 	uint8_t rs2 = (instruction >> 20) & 0x1f;
 
@@ -390,28 +394,28 @@ static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
 	bool branch = false;
 	switch (command) {
 	case 0x0: // beq
-		branch = x[rs1] == x[rs2];
+		branch = core->x[rs1] == core->x[rs2];
 		break;
 	case 0x1: // bne
-		branch = x[rs1] != x[rs2];
+		branch = core->x[rs1] != core->x[rs2];
 		break;
 	case 0x4: { // blt
-		int64_t rs1_value = *(int64_t *)&x[rs1];
-		int64_t rs2_value = *(int64_t *)&x[rs2];
+		int64_t rs1_value = *(int64_t *)&core->x[rs1];
+		int64_t rs2_value = *(int64_t *)&core->x[rs2];
 		branch            = rs1_value < rs2_value;
 		break;
 	}
 	case 0x5: { // bge
-		int64_t rs1_value = *(int64_t *)&x[rs1];
-		int64_t rs2_value = *(int64_t *)&x[rs2];
+		int64_t rs1_value = *(int64_t *)&core->x[rs1];
+		int64_t rs2_value = *(int64_t *)&core->x[rs2];
 		branch            = rs1_value >= rs2_value;
 		break;
 	}
 	case 0x6: // bltu
-		branch = x[rs1] < x[rs2];
+		branch = core->x[rs1] < core->x[rs2];
 		break;
 	case 0x7: // bgeu
-		branch = x[rs1] >= x[rs2];
+		branch = core->x[rs1] >= core->x[rs2];
 		break;
 	default:
 		assert(false);
@@ -421,15 +425,15 @@ static void opcode_beq_bne_blt_bge_bltu_bgeu(uint32_t instruction) {
 	if (branch) {
 		uint32_t immediate =
 		    (((instruction >> 31) & 0x1) << 12) | (((instruction >> 25) & 0x3f) << 5) | (((instruction >> 8) & 0xf) << 1) | (((instruction >> 7) & 0x1) << 11);
-		pc += sign_extend64(immediate, 13);
-		assert(pc != 0);
+		core->pc += sign_extend64(immediate, 13);
+		assert(core->pc != 0);
 	}
 	else {
-		increment_pc();
+		increment_pc(core);
 	}
 }
 
-static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu_div_divu_rem_remu(uint32_t instruction) {
+static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu_div_divu_rem_remu(cpu_core *core, uint32_t instruction) {
 	uint8_t upper  = (instruction >> 25) & 0x7f;
 	uint8_t middle = (instruction >> 12) & 0x7;
 
@@ -442,15 +446,15 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x0: { // add_sub
 			switch (upper) {
 			case 0x00: // add
-				x[rd] = x[rs1] + x[rs2];
+				core->x[rd] = core->x[rs1] + core->x[rs2];
 				break;
 			case 0x20: // sub
-				x[rd] = x[rs1] - x[rs2];
+				core->x[rd] = core->x[rs1] - core->x[rs2];
 				break;
 			case 0x01: { // mul
-				int64_t rs1_value = *(int64_t *)&x[rs1];
-				int64_t rs2_value = *(int64_t *)&x[rs2];
-				x[rd]             = rs1_value * rs2_value;
+				int64_t rs1_value = *(int64_t *)&core->x[rs1];
+				int64_t rs2_value = *(int64_t *)&core->x[rs2];
+				core->x[rd]       = rs1_value * rs2_value;
 				break;
 			}
 			default:
@@ -462,7 +466,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x1: // sll_mulh
 			switch (upper) {
 			case 0x00: // sll
-				x[rd] = x[rs1] << x[rs2];
+				core->x[rd] = core->x[rs1] << core->x[rs2];
 				break;
 			case 0x01: // mulh
 				assert(false);
@@ -473,11 +477,11 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 			}
 			break;
 		case 0x2: { // slt_mulhsu
-			int64_t rs1_value = *(int64_t *)&x[rs1];
-			int64_t rs2_value = *(int64_t *)&x[rs2];
+			int64_t rs1_value = *(int64_t *)&core->x[rs1];
+			int64_t rs2_value = *(int64_t *)&core->x[rs2];
 			switch (upper) {
 			case 0x00: // slt
-				x[rd] = (rs1_value < rs2_value) ? 1u : 0u;
+				core->x[rd] = (rs1_value < rs2_value) ? 1u : 0u;
 				break;
 			case 0x01: // mulhsu
 				assert(false);
@@ -488,7 +492,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x3: // sltu_mulhu
 			switch (upper) {
 			case 0x00: // sltu
-				x[rd] = (x[rs1] < x[rs2]) ? 1u : 0u;
+				core->x[rd] = (core->x[rs1] < core->x[rs2]) ? 1u : 0u;
 				break;
 			case 0x01: // mulhu
 				assert(false);
@@ -498,7 +502,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x4: // xor_div
 			switch (upper) {
 			case 0x00: // xor
-				x[rd] = x[rs1] ^ x[rs2];
+				core->x[rd] = core->x[rs1] ^ core->x[rs2];
 				break;
 			case 0x01: // div
 				assert(false);
@@ -508,19 +512,19 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x5: { // srl_sra_divu
 			uint8_t upper = (instruction >> 25) & 0x7f;
 
-			uint8_t rs2_value = x[rs2] & 0x1f;
+			uint8_t rs2_value = core->x[rs2] & 0x1f;
 
 			switch (upper) {
 			case 0x00: // srl
-				x[rd] = x[rs1] >> rs2_value;
+				core->x[rd] = core->x[rs1] >> rs2_value;
 				break;
 			case 0x01: // divu
-				x[rd] = x[rs1] / x[rs2];
+				core->x[rd] = core->x[rs1] / core->x[rs2];
 				break;
 			case 0x20: { // sra
-				int64_t rs1_value = *(int64_t *)&x[rs1];
+				int64_t rs1_value = *(int64_t *)&core->x[rs1];
 				int64_t result    = rs1_value >> rs2_value;
-				x[rd]             = *(uint64_t *)&result;
+				core->x[rd]       = *(uint64_t *)&result;
 				break;
 			default:
 				assert(false);
@@ -532,7 +536,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x6: // or_rem
 			switch (upper) {
 			case 0x00: // or
-				x[rd] = x[rs1] | x[rs2];
+				core->x[rd] = core->x[rs1] | core->x[rs2];
 				break;
 			case 0x01: // rem
 				assert(false);
@@ -542,7 +546,7 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		case 0x7: // and_remu
 			switch (upper) {
 			case 0x00: // and
-				x[rd] = x[rs1] & x[rs2];
+				core->x[rd] = core->x[rs1] & core->x[rs2];
 				break;
 			case 0x01: // remu
 				assert(false);
@@ -555,10 +559,10 @@ static void opcode_add_sub_sll_slt_sltu_xor_srl_sra_or_and_mul_mulh_mulhsu_mulhu
 		}
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_addw_subw_sllw_srlw_sraw(uint32_t instruction) {
+static void opcode_addw_subw_sllw_srlw_sraw(cpu_core *core, uint32_t instruction) {
 	uint8_t middle = (instruction >> 12) & 0x7;
 
 	uint8_t rs1 = (instruction >> 15) & 0x1f;
@@ -572,31 +576,31 @@ static void opcode_addw_subw_sllw_srlw_sraw(uint32_t instruction) {
 
 			switch (upper) {
 			case 0x00: // addw
-				x[rd] = sign_extend64((x[rs1] + x[rs2]) & 0xffffffff, 32);
+				core->x[rd] = sign_extend64((core->x[rs1] + core->x[rs2]) & 0xffffffff, 32);
 				break;
 			case 0x30: // subw
-				x[rd] = sign_extend64((x[rs1] - x[rs2]) & 0xffffffff, 32);
+				core->x[rd] = sign_extend64((core->x[rs1] - core->x[rs2]) & 0xffffffff, 32);
 				break;
 			}
 			break;
 		}
 		case 0x1: // sllw
-			x[rd] = sign_extend64((x[rs1] << (x[rs2] & 0x1f)) & 0xffffffff, 32);
+			core->x[rd] = sign_extend64((core->x[rs1] << (core->x[rs2] & 0x1f)) & 0xffffffff, 32);
 			break;
 		case 0x5: { // srlw_sraw
 			uint8_t upper = (instruction >> 25) & 0x7f;
 
-			uint8_t rs2_value = x[rs2] & 0x1f;
+			uint8_t rs2_value = core->x[rs2] & 0x1f;
 
 			switch (upper) {
 			case 0x0: // srlw
-				x[rd] = sign_extend64((x[rs1] & 0xffffffff) >> rs2_value, 32);
+				core->x[rd] = sign_extend64((core->x[rs1] & 0xffffffff) >> rs2_value, 32);
 				break;
 			case 0x20: { // sraw
-				uint64_t reg1      = x[rs1] & 0xffffffff;
+				uint64_t reg1      = core->x[rs1] & 0xffffffff;
 				int32_t  rs1_value = *(int32_t *)&reg1;
 				int32_t  result    = rs1_value >> rs2_value;
-				x[rd]              = sign_extend64(result, 32);
+				core->x[rd]        = sign_extend64(result, 32);
 				break;
 			}
 			}
@@ -608,10 +612,10 @@ static void opcode_addw_subw_sllw_srlw_sraw(uint32_t instruction) {
 		}
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_flw(uint32_t instruction) {
+static void opcode_flw(cpu_core *core, uint32_t instruction) {
 	uint8_t  rs1    = (instruction >> 15) & 0x1f;
 	uint8_t  rd     = (instruction >> 7) & 0x1f;
 	uint16_t offset = instruction >> 20;
@@ -619,10 +623,10 @@ static void opcode_flw(uint32_t instruction) {
 
 	switch (middle) {
 	case 0x2: { // flw
-		uint32_t memory_value = read_memory32(x[rs1] + sign_extend64(offset, 12));
+		uint32_t memory_value = read_memory32(core->x[rs1] + sign_extend64(offset, 12));
 		float    float_value;
 		memcpy(&float_value, &memory_value, sizeof(uint32_t));
-		f[rd] = (double)float_value;
+		core->f[rd] = (double)float_value;
 		break;
 	}
 	default:
@@ -630,10 +634,10 @@ static void opcode_flw(uint32_t instruction) {
 		break;
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_fsw(uint32_t instruction) {
+static void opcode_fsw(cpu_core *core, uint32_t instruction) {
 	uint8_t middle = (instruction >> 12) & 0x7;
 
 	uint8_t  offset0 = (instruction >> 7) & 0x1f;
@@ -665,23 +669,23 @@ static void opcode_fsw(uint32_t instruction) {
 				assert(false);
 				break;
 			case 0x6: { // 32 bit
-				assert(sew == 32);
+				assert(core->sew == 32);
 
-				uint64_t base = x[rs1];
+				uint64_t base = core->x[rs1];
 
-				for (uint16_t i = 0; i < vl; ++i) {
-					*(uint32_t *)(&ram[base + 4 * i]) = v[vs3].values.u32[i];
+				for (uint16_t i = 0; i < core->vl; ++i) {
+					*(uint32_t *)(&ram[base + 4 * i]) = core->v[vs3].values.u32[i];
 				}
 
 				break;
 			}
 			case 0x7: // 64 bit
-				assert(sew == 64);
+				assert(core->sew == 64);
 
-				uint64_t base = x[rs1];
+				uint64_t base = core->x[rs1];
 
-				for (uint16_t i = 0; i < vl; ++i) {
-					*(uint64_t *)(&ram[base + 8 * i]) = v[vs3].values.u64[i];
+				for (uint16_t i = 0; i < core->vl; ++i) {
+					*(uint64_t *)(&ram[base + 8 * i]) = core->v[vs3].values.u64[i];
 				}
 
 				break;
@@ -710,8 +714,8 @@ static void opcode_fsw(uint32_t instruction) {
 
 			uint8_t vs3 = (instruction >> 7) & 0x17;
 
-			for (uint8_t reg = vs3; reg < vs3 + lmul; ++reg) {
-				memcpy(&ram[rs1 + (reg - vs3)], &v[reg].values.u8[0], 128);
+			for (uint8_t reg = vs3; reg < vs3 + core->lmul; ++reg) {
+				memcpy(&ram[rs1 + (reg - vs3)], &core->v[reg].values.u8[0], 128);
 			}
 
 			break;
@@ -724,10 +728,10 @@ static void opcode_fsw(uint32_t instruction) {
 		break;
 	}
 	case 0x2: { // fsw
-		float    float_value = (float)f[rs2];
+		float    float_value = (float)core->f[rs2];
 		uint32_t value;
 		memcpy(&value, &float_value, sizeof(uint32_t));
-		store_memory32(x[rs1] + sign_extend64(offset, 12), value);
+		store_memory32(core->x[rs1] + sign_extend64(offset, 12), value);
 		break;
 	}
 	default:
@@ -735,14 +739,14 @@ static void opcode_fsw(uint32_t instruction) {
 		break;
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_fence_fencei(uint32_t instruction) {
-	increment_pc();
+static void opcode_fence_fencei(cpu_core *core, uint32_t instruction) {
+	increment_pc(core);
 }
 
-static void opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret_wfi_sfencevma(uint32_t instruction) {
+static void opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret_wfi_sfencevma(cpu_core *core, uint32_t instruction) {
 	uint8_t middle = (instruction >> 12) & 0x7;
 
 	switch (middle) {
@@ -761,7 +765,7 @@ static void opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret
 
 		const uint64_t csr_vlenb = 128;
 
-		x[rd] = csr_vlenb;
+		core->x[rd] = csr_vlenb;
 
 		break;
 	}
@@ -781,10 +785,10 @@ static void opcode_csrrw_csrrs_csrrc_csrrwi_csrrsi_csrrci_ecall_ebreak_sret_mret
 		assert(false);
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_vector(uint32_t instruction) {
+static void opcode_vector(cpu_core *core, uint32_t instruction) {
 	uint8_t funct3 = (instruction >> 12) & 0x7;
 
 	switch (funct3) {
@@ -800,16 +804,16 @@ static void opcode_vector(uint32_t instruction) {
 			uint8_t imm  = (instruction >> 15) & 0x1f;
 			uint8_t mask = (instruction >> 25) & 0x1;
 
-			switch (sew) {
+			switch (core->sew) {
 			case 8: {
 				uint8_t value = (uint8_t)imm;
 
-				for (uint16_t element = 0; element < vl; ++element) {
-					if (mask == 1 || v0_bit(element)) {
-						v[vd].values.u8[element] = value;
+				for (uint16_t element = 0; element < core->vl; ++element) {
+					if (mask == 1 || v0_bit(core, element)) {
+						core->v[vd].values.u8[element] = value;
 					}
 					else {
-						v[vd].values.u8[element] = v[vs2].values.u8[element];
+						core->v[vd].values.u8[element] = core->v[vs2].values.u8[element];
 					}
 				}
 				break;
@@ -817,12 +821,12 @@ static void opcode_vector(uint32_t instruction) {
 			case 32: {
 				uint32_t value = (uint32_t)imm;
 
-				for (uint16_t element = 0; element < vl; ++element) {
-					if (mask == 1 || v0_bit(element)) {
-						v[vd].values.u32[element] = value;
+				for (uint16_t element = 0; element < core->vl; ++element) {
+					if (mask == 1 || v0_bit(core, element)) {
+						core->v[vd].values.u32[element] = value;
 					}
 					else {
-						v[vd].values.u32[element] = v[vs2].values.u32[element];
+						core->v[vd].values.u32[element] = core->v[vs2].values.u32[element];
 					}
 				}
 				break;
@@ -830,12 +834,12 @@ static void opcode_vector(uint32_t instruction) {
 			case 64: {
 				uint64_t value = (uint64_t)imm;
 
-				for (uint16_t element = 0; element < vl; ++element) {
-					if (mask == 1 || v0_bit(element)) {
-						v[vd].values.u64[element] = value;
+				for (uint16_t element = 0; element < core->vl; ++element) {
+					if (mask == 1 || v0_bit(core, element)) {
+						core->v[vd].values.u64[element] = value;
 					}
 					else {
-						v[vd].values.u64[element] = v[vs2].values.u64[element];
+						core->v[vd].values.u64[element] = core->v[vs2].values.u64[element];
 					}
 				}
 				break;
@@ -861,21 +865,21 @@ static void opcode_vector(uint32_t instruction) {
 			uint8_t vd   = (instruction >> 7) & 0x1f;
 			uint8_t mask = (instruction >> 25) & 0x1;
 
-			switch (sew) {
+			switch (core->sew) {
 			case 8: {
-				uint8_t value = (uint8_t)x[rs1];
-				for (uint16_t element = 0; element < vl; ++element) {
-					if (mask == 1 || v0_bit(element)) {
-						v[vd].values.u8[element] = value;
+				uint8_t value = (uint8_t)core->x[rs1];
+				for (uint16_t element = 0; element < core->vl; ++element) {
+					if (mask == 1 || v0_bit(core, element)) {
+						core->v[vd].values.u8[element] = value;
 					}
 				}
 				break;
 			}
 			case 32: {
-				uint32_t value = (uint32_t)x[rs1];
-				for (uint16_t element = 0; element < vl; ++element) {
-					if (mask == 1 || v0_bit(element)) {
-						v[vd].values.u32[element] = value;
+				uint32_t value = (uint32_t)core->x[rs1];
+				for (uint16_t element = 0; element < core->vl; ++element) {
+					if (mask == 1 || v0_bit(core, element)) {
+						core->v[vd].values.u32[element] = value;
 					}
 				}
 				break;
@@ -903,9 +907,9 @@ static void opcode_vector(uint32_t instruction) {
 			uint8_t rs1 = (instruction >> 15) & 0x1f;
 			uint8_t vd  = (instruction >> 7) & 0x1f;
 
-			switch (sew) {
+			switch (core->sew) {
 			case 32: {
-				v[vd].values.u32[0] = (uint32_t)x[rs1];
+				core->v[vd].values.u32[0] = (uint32_t)core->x[rs1];
 				break;
 			}
 			default:
@@ -934,16 +938,16 @@ static void opcode_vector(uint32_t instruction) {
 
 			switch (vsew) {
 			case 0x0:
-				sew = 8;
+				core->sew = 8;
 				break;
 			case 0x1:
-				sew = 16;
+				core->sew = 16;
 				break;
 			case 0x2:
-				sew = 32;
+				core->sew = 32;
 				break;
 			case 0x3:
-				sew = 64;
+				core->sew = 64;
 				break;
 			default:
 				assert(false);
@@ -952,32 +956,32 @@ static void opcode_vector(uint32_t instruction) {
 
 			switch (vlmul) {
 			case 0x0:
-				lmul    = 1;
-				lmuldiv = 1;
+				core->lmul    = 1;
+				core->lmuldiv = 1;
 				break;
 			case 0x1:
-				lmul    = 2;
-				lmuldiv = 1;
+				core->lmul    = 2;
+				core->lmuldiv = 1;
 				break;
 			case 0x2:
-				lmul    = 4;
-				lmuldiv = 1;
+				core->lmul    = 4;
+				core->lmuldiv = 1;
 				break;
 			case 0x3:
-				lmul    = 8;
-				lmuldiv = 1;
+				core->lmul    = 8;
+				core->lmuldiv = 1;
 				break;
 			case 0x5:
-				lmul    = 1;
-				lmuldiv = 8;
+				core->lmul    = 1;
+				core->lmuldiv = 8;
 				break;
 			case 0x6:
-				lmul    = 1;
-				lmuldiv = 4;
+				core->lmul    = 1;
+				core->lmuldiv = 4;
 				break;
 			case 0x7:
-				lmul    = 1;
-				lmuldiv = 2;
+				core->lmul    = 1;
+				core->lmuldiv = 2;
 				break;
 			default:
 				assert(false);
@@ -987,21 +991,21 @@ static void opcode_vector(uint32_t instruction) {
 			uint16_t avl = 0;
 
 			if (rs1 != 0) {
-				avl = (uint16_t)x[rs1];
+				avl = (uint16_t)core->x[rs1];
 			}
 			else if (rd != 0) {
 				avl = ~0;
 			}
 			else {
-				avl = vl;
+				avl = core->vl;
 			}
 
 			uint16_t vlen  = 1024;
-			uint16_t vlmax = (vlen / sew) * lmul / lmuldiv;
-			vl             = min(avl, vlmax);
+			uint16_t vlmax = (vlen / core->sew) * core->lmul / core->lmuldiv;
+			core->vl       = min(avl, vlmax);
 
 			if (rd != 0) {
-				x[rd] = vl;
+				core->x[rd] = core->vl;
 			}
 		}
 		else {
@@ -1017,16 +1021,16 @@ static void opcode_vector(uint32_t instruction) {
 
 				switch (vsew) {
 				case 0x0:
-					sew = 8;
+					core->sew = 8;
 					break;
 				case 0x1:
-					sew = 16;
+					core->sew = 16;
 					break;
 				case 0x2:
-					sew = 32;
+					core->sew = 32;
 					break;
 				case 0x3:
-					sew = 64;
+					core->sew = 64;
 					break;
 				default:
 					assert(false);
@@ -1035,32 +1039,32 @@ static void opcode_vector(uint32_t instruction) {
 
 				switch (vlmul) {
 				case 0x0:
-					lmul    = 1;
-					lmuldiv = 1;
+					core->lmul    = 1;
+					core->lmuldiv = 1;
 					break;
 				case 0x1:
-					lmul    = 2;
-					lmuldiv = 1;
+					core->lmul    = 2;
+					core->lmuldiv = 1;
 					break;
 				case 0x2:
-					lmul    = 4;
-					lmuldiv = 1;
+					core->lmul    = 4;
+					core->lmuldiv = 1;
 					break;
 				case 0x3:
-					lmul    = 8;
-					lmuldiv = 1;
+					core->lmul    = 8;
+					core->lmuldiv = 1;
 					break;
 				case 0x5:
-					lmul    = 1;
-					lmuldiv = 8;
+					core->lmul    = 1;
+					core->lmuldiv = 8;
 					break;
 				case 0x6:
-					lmul    = 1;
-					lmuldiv = 4;
+					core->lmul    = 1;
+					core->lmuldiv = 4;
 					break;
 				case 0x7:
-					lmul    = 1;
-					lmuldiv = 2;
+					core->lmul    = 1;
+					core->lmuldiv = 2;
 					break;
 				default:
 					assert(false);
@@ -1070,11 +1074,11 @@ static void opcode_vector(uint32_t instruction) {
 				uint16_t avl = uimm;
 
 				uint16_t vlen  = 1024;
-				uint16_t vlmax = (vlen / sew) * lmul / lmuldiv;
-				vl             = min(avl, vlmax);
+				uint16_t vlmax = (vlen / core->sew) * core->lmul / core->lmuldiv;
+				core->vl       = min(avl, vlmax);
 
 				if (rd != 0) {
-					x[rd] = vl;
+					core->x[rd] = core->vl;
 				}
 			}
 			else { // vsetvl
@@ -1089,12 +1093,12 @@ static void opcode_vector(uint32_t instruction) {
 		break;
 	}
 
-	increment_pc();
+	increment_pc(core);
 }
 
-static void opcode_not_implemented(uint32_t instruction) {
+static void opcode_not_implemented(cpu_core *core, uint32_t instruction) {
 	assert(false);
-	increment_pc();
+	increment_pc(core);
 }
 
 opcode_func *opcodes[256] = {
@@ -1545,7 +1549,7 @@ static void execute_command_list(void) {
 
 static void update(void *data) {
 	while (!framebuffer_present && !command_list_present) {
-		execute_opcode();
+		execute_opcode(&cpu);
 	}
 
 	if (framebuffer_present) {
@@ -1640,7 +1644,7 @@ int kickstart(int argc, char **argv) {
 	framebuffer_stride  = framebuffer_width * 4u;
 	framebuffer_address = MEMORY_SIZE - framebuffer_stride * framebuffer_height;
 
-	pc = entry;
+	cpu.pc = entry;
 
 	kore_init("Kompjuta", width, height, NULL, NULL);
 	kore_set_update_callback(update, NULL);
@@ -1653,7 +1657,7 @@ int kickstart(int argc, char **argv) {
 	kore_gpu_device_create_command_list(&device, KORE_GPU_COMMAND_LIST_TYPE_GRAPHICS, &list);
 
 	while (!framebuffer_present && !command_list_present) {
-		execute_opcode();
+		execute_opcode(&cpu);
 	}
 
 	if (framebuffer_present) {
