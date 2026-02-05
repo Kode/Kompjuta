@@ -662,12 +662,28 @@ static void opcode_fsw(cpu_core *core, uint32_t instruction) {
 
 			uint8_t width = (instruction >> 12) & 0x7;
 			switch (width) {
-			case 0x0: // 8 bit
-				assert(false);
+			case 0x0: { // 8 bit
+				assert(core->sew == 8);
+
+				uint64_t base = core->x[rs1];
+
+				for (uint16_t i = 0; i < core->vl; ++i) {
+					*(uint8_t *)(&ram[base + 4 * i]) = core->v[vs3].values.u8[i];
+				}
+
 				break;
-			case 0x5: // 16 bit
-				assert(false);
+			}
+			case 0x5: { // 16 bit
+				assert(core->sew == 16);
+
+				uint64_t base = core->x[rs1];
+
+				for (uint16_t i = 0; i < core->vl; ++i) {
+					*(uint16_t *)(&ram[base + 4 * i]) = core->v[vs3].values.u16[i];
+				}
+
 				break;
+			}
 			case 0x6: { // 32 bit
 				assert(core->sew == 32);
 
