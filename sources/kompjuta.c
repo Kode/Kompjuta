@@ -40,6 +40,7 @@ typedef struct cpu_core {
 } cpu_core;
 
 static cpu_core cpu = {0};
+static cpu_core gpu = {0};
 
 typedef void opcode_func(cpu_core *core, uint32_t instruction);
 opcode_func *opcodes[];
@@ -1551,8 +1552,14 @@ static void execute_command_list(void) {
 			vertex_shader   = command->data.set_render_pipeline.vertex_shader;
 			fragment_shader = command->data.set_render_pipeline.fragment_shader;
 			break;
-		case KOMPJUTA_GPU_COMMAND_DRAW_INDEXED:
+		case KOMPJUTA_GPU_COMMAND_DRAW_INDEXED: {
+			gpu.pc   = (uint64_t)vertex_shader;
+			gpu.x[2] = (uint64_t)command->data.draw_indexed.shader_stack; // sp
+			for (int i = 0; i < 10; ++i) {
+				execute_opcode(&gpu);
+			}
 			break;
+		}
 		case KOMPJUTA_GPU_COMMAND_PRESENT:
 			kore_gpu_command_list_present(&list);
 			command_list_present = true;
