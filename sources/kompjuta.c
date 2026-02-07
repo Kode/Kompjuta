@@ -616,7 +616,7 @@ static void opcode_addw_subw_sllw_srlw_sraw(cpu_core *core, uint32_t instruction
 	increment_pc(core);
 }
 
-static void opcode_flw(cpu_core *core, uint32_t instruction) {
+static void opcode_flw_vle(cpu_core *core, uint32_t instruction) {
 	uint8_t  rs1    = (instruction >> 15) & 0x1f;
 	uint8_t  rd     = (instruction >> 7) & 0x1f;
 	uint16_t offset = instruction >> 20;
@@ -628,6 +628,9 @@ static void opcode_flw(cpu_core *core, uint32_t instruction) {
 		float    float_value;
 		memcpy(&float_value, &memory_value, sizeof(uint32_t));
 		core->f[rd] = (double)float_value;
+		break;
+	}
+	case 0x5: { // vle16.v
 		break;
 	}
 	default:
@@ -729,10 +732,14 @@ static void opcode_fsw(cpu_core *core, uint32_t instruction) {
 				break;
 			}
 
-			uint8_t vs3 = (instruction >> 7) & 0x17;
+			uint8_t vs3 = (instruction >> 7) & 0x1f;
 
-			for (uint8_t reg = vs3; reg < vs3 + core->lmul; ++reg) {
-				memcpy(&ram[rs1 + (reg - vs3)], &core->v[reg].values.u8[0], 128);
+			for (uint8_t i = 0; i < nf; ++i) {
+				uint8_t reg = vs3 + i;
+
+				uint64_t offset = rs1 + i * 128;
+
+				memcpy(&ram[offset], &core->v[reg].values.u8[0], 128);
 			}
 
 			break;
@@ -1126,7 +1133,7 @@ opcode_func *opcodes[256] = {
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented,
-    &opcode_flw,
+    &opcode_flw_vle,
     &opcode_not_implemented,
     &opcode_not_implemented,
     &opcode_not_implemented, // 10
