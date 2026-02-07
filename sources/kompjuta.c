@@ -1553,11 +1553,26 @@ static void execute_command_list(void) {
 			fragment_shader = command->data.set_render_pipeline.fragment_shader;
 			break;
 		case KOMPJUTA_GPU_COMMAND_DRAW_INDEXED: {
-			gpu.pc   = (uint64_t)vertex_shader;
-			gpu.x[2] = (uint64_t)command->data.draw_indexed.shader_stack; // sp
-			for (int i = 0; i < 10; ++i) {
-				execute_opcode(&gpu);
+			for (uint32_t index_offset = 0; index_offset < command->data.draw_indexed.index_count; index_offset += 32) {
+				gpu.x[1] = 0; // magical value for ra
+
+				gpu.pc = (uint64_t)vertex_shader;
+
+				gpu.x[2] = (uint64_t)command->data.draw_indexed.shader_stack; // sp
+
+				uint32_t remaining_indices = min(32, command->data.draw_indexed.index_count - index_offset);
+				uint64_t vertex_output     = (uint64_t)command->data.draw_indexed.vertex_output + vertex_stride * index_offset;
+
+				gpu.x[10] = remaining_indices;     // a0, _lance_count
+				gpu.x[11] = (uint64_t)index_data;  // a1, __indices
+				gpu.x[12] = vertex_output;         // a2, __output
+				gpu.x[13] = (uint64_t)vertex_data; // a3, __vertices
+
+				while (gpu.pc != 0) {
+					execute_opcode(&gpu);
+				}
 			}
+
 			break;
 		}
 		case KOMPJUTA_GPU_COMMAND_PRESENT:
