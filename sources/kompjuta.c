@@ -815,9 +815,32 @@ static void opcode_vector(cpu_core *core, uint32_t instruction) {
 	uint8_t funct3 = (instruction >> 12) & 0x7;
 
 	switch (funct3) {
-	case 0x2: // vmv
-		assert(false);
+	case 0x2: { // OPMVV
+		uint8_t funct6 = instruction >> 26;
+		switch (funct6) {
+		case 0x12: { // VXUNARY0
+			uint8_t vs1 = (instruction >> 15) & 0x1F;
+			switch (vs1) {
+			case 0x6: { // vzext.vf2
+				uint8_t vd  = (instruction >> 7) & 0x1f;
+				uint8_t vs2 = (instruction >> 20) & 0x1f;
+				for (uint16_t index = 0; index < core->vl; ++index) {
+					core->v[vd].values.u32[index] = core->v[vs2].values.u16[index];
+				}
+				break;
+			}
+			default:
+				assert(false);
+				break;
+			}
+			break;
+		}
+		default:
+			assert(false);
+			break;
+		}
 		break;
+	}
 	case 0x3: { // OPIVI
 		uint8_t funct6 = instruction >> 26;
 		switch (funct6) {
