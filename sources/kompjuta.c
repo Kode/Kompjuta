@@ -737,7 +737,7 @@ static void opcode_fsw(cpu_core *core, uint32_t instruction) {
 			for (uint8_t i = 0; i < nf; ++i) {
 				uint8_t reg = vs3 + i;
 
-				uint64_t offset = rs1 + i * 128;
+				uint64_t offset = core->x[rs1] + i * 128;
 
 				memcpy(&ram[offset], &core->v[reg].values.u8[0], 128);
 			}
