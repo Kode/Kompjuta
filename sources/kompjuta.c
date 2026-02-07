@@ -1558,7 +1558,7 @@ static void execute_command_list(void) {
 
 				gpu.pc = (uint64_t)vertex_shader;
 
-				gpu.x[2] = (uint64_t)command->data.draw_indexed.shader_stack; // sp
+				gpu.x[2] = command->data.draw_indexed.stack_top; // sp
 
 				uint32_t remaining_indices = min(32, command->data.draw_indexed.index_count - index_offset);
 				uint64_t vertex_output     = (uint64_t)command->data.draw_indexed.vertex_output + vertex_stride * index_offset;
