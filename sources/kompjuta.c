@@ -378,7 +378,7 @@ static void opcode_jalr(cpu_core *core, uint32_t instruction) {
 
 	uint64_t t      = core->pc + 4;
 	uint64_t nextpc = (core->x[rs1] + sign_extend64(immediate, 12)) & ~1;
-	assert(nextpc != 0);
+
 	core->pc = nextpc;
 
 	if (rd != 0) {
@@ -623,6 +623,16 @@ static void opcode_flw_vle(cpu_core *core, uint32_t instruction) {
 	uint8_t  middle = (instruction >> 12) & 0x7;
 
 	switch (middle) {
+	case 0x0: { // vle8.v
+		uint8_t vd = (instruction >> 7) & 0x1f;
+
+		uint64_t base = core->x[rs1];
+
+		for (uint16_t i = 0; i < core->vl; ++i) {
+			core->v[vd].values.u8[i] = *(uint8_t *)(&ram[base + 1 * i]);
+		}
+		break;
+	}
 	case 0x2: { // flw
 		uint32_t memory_value = read_memory32(core->x[rs1] + sign_extend64(offset, 12));
 		float    float_value;
@@ -638,6 +648,18 @@ static void opcode_flw_vle(cpu_core *core, uint32_t instruction) {
 		for (uint16_t i = 0; i < core->vl; ++i) {
 			core->v[vd].values.u16[i] = *(uint16_t *)(&ram[base + 2 * i]);
 		}
+		break;
+	}
+	case 0x6: { // vluxei32.v
+		uint8_t vd  = (instruction >> 7) & 0x1f;
+		uint8_t vs2 = (instruction >> 20) & 0x1f;
+
+		uint64_t base = core->x[rs1];
+
+		for (uint16_t i = 0; i < core->vl; ++i) {
+			core->v[vd].values.u32[i] = *(uint32_t *)(&ram[base + core->v[vs2].values.u32[i]]);
+		}
+
 		break;
 	}
 	default:
@@ -943,7 +965,7 @@ static void opcode_vector(cpu_core *core, uint32_t instruction) {
 		}
 		break;
 	}
-	case 0x6: { // OPMVX
+	case 0x6: { // OPMVX (vector-scalar)
 		uint8_t funct6 = instruction >> 26;
 		switch (funct6) {
 		case 0x10: { // VRXUNARY0
@@ -962,6 +984,19 @@ static void opcode_vector(cpu_core *core, uint32_t instruction) {
 				assert(false);
 				break;
 			}
+			break;
+		}
+		case 0x25: { // vmul.vx
+			uint8_t rs1 = (instruction >> 15) & 0x1f;
+			uint8_t vd  = (instruction >> 7) & 0x1f;
+			uint8_t vs2 = (instruction >> 20) & 0x1f;
+
+			assert(core->sew == 32);
+
+			for (uint16_t index = 0; index < core->vl; ++index) {
+				core->v[vd].values.u32[index] = core->v[vs2].values.u32[index] * (uint32_t)core->x[rs1];
+			}
+
 			break;
 		}
 		default:
