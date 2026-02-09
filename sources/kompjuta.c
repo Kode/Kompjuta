@@ -6,6 +6,7 @@
 #include <kong.h>
 
 #include <assert.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -51,7 +52,6 @@ static uint32_t framebuffer_height  = 0;
 static uint32_t framebuffer_stride  = 0;
 static uint64_t framebuffer_address = 0;
 
-static bool     command_list_present = false;
 static uint32_t command_list_size    = 0;
 static uint64_t command_list_address = 0;
 
@@ -1560,6 +1560,14 @@ static kore_gpu_buffer       framebuffer_buffer;
 static const int width  = 800;
 static const int height = 600;
 
+static float x_screen_to_pixel(float x) {
+	return (x + 1.0f) * (width / 2.0f);
+}
+
+static float y_screen_to_pixel(float y) {
+	return (1.0f - y) * (height / 2.0f);
+}
+
 static void execute_command_list(void) {
 	kompjuta_gpu_command *commands = (kompjuta_gpu_command *)&ram[command_list_address];
 
@@ -1573,36 +1581,20 @@ static void execute_command_list(void) {
 		kompjuta_gpu_command *command = &commands[command_index];
 		switch (command->kind) {
 		case KOMPJUTA_GPU_COMMAND_CLEAR: {
-			kore_gpu_texture *gpu_framebuffer = kore_gpu_device_get_framebuffer(&device);
+			uint8_t red   = (uint8_t)(command->data.clear.r * 255.0f);
+			uint8_t green = (uint8_t)(command->data.clear.g * 255.0f);
+			uint8_t blue  = (uint8_t)(command->data.clear.b * 255.0f);
+			uint8_t alpha = (uint8_t)(command->data.clear.a * 255.0f);
 
-			kore_gpu_color clear_color = {
-			    .r = command->data.clear.r,
-			    .g = command->data.clear.g,
-			    .b = command->data.clear.b,
-			    .a = command->data.clear.a,
-			};
+			for (int y = 0; y <= height; ++y) {
+				for (int x = 0; x <= width; ++x) {
+					ram[framebuffer_address + y * framebuffer_stride + x * 4 + 0] = red;
+					ram[framebuffer_address + y * framebuffer_stride + x * 4 + 1] = green;
+					ram[framebuffer_address + y * framebuffer_stride + x * 4 + 2] = blue;
+					ram[framebuffer_address + y * framebuffer_stride + x * 4 + 3] = alpha;
+				}
+			}
 
-			kore_gpu_render_pass_parameters parameters = {
-			    .color_attachments_count = 1,
-			    .color_attachments =
-			        {
-			            {
-			                .load_op     = KORE_GPU_LOAD_OP_CLEAR,
-			                .clear_value = clear_color,
-			                .texture =
-			                    {
-			                        .texture           = gpu_framebuffer,
-			                        .array_layer_count = 1,
-			                        .mip_level_count   = 1,
-			                        .format            = kore_gpu_device_framebuffer_format(&device),
-			                        .dimension         = KORE_GPU_TEXTURE_VIEW_DIMENSION_2D,
-			                    },
-			            },
-			        },
-			};
-			kore_gpu_command_list_begin_render_pass(&list, &parameters);
-
-			kore_gpu_command_list_end_render_pass(&list);
 			break;
 		}
 		case KOMPJUTA_GPU_COMMAND_SET_INDEX_BUFFER:
@@ -1635,90 +1627,149 @@ static void execute_command_list(void) {
 				while (gpu.pc != 0) {
 					execute_opcode(&gpu);
 				}
+
+				float *x = (float *)&ram[vertex_output];
+				float *y = (float *)&ram[vertex_output + sizeof(float) * 32];
+
+				for (uint32_t index = 0; index < command->data.draw_indexed.index_count; index += 3) {
+					x[0] = x_screen_to_pixel(x[0]);
+					x[1] = x_screen_to_pixel(x[1]);
+					x[2] = x_screen_to_pixel(x[2]);
+
+					y[0] = y_screen_to_pixel(y[0]);
+					y[1] = y_screen_to_pixel(y[1]);
+					y[2] = y_screen_to_pixel(y[2]);
+
+					float min_x = floorf(min(min(x[0], x[1]), x[2]));
+					float max_x = ceilf(max(max(x[0], x[1]), x[2]));
+
+					float min_y = floorf(min(min(y[0], y[1]), y[2]));
+					float max_y = ceilf(max(max(y[0], y[1]), y[2]));
+
+					float a0 = y[0] - y[1];
+					float b0 = x[1] - x[0];
+					float c0 = x[0] * y[1] - y[0] * x[1];
+
+					float a1 = y[1] - y[2];
+					float b1 = x[2] - x[1];
+					float c1 = x[1] * y[2] - y[1] * x[2];
+
+					float a2 = y[2] - y[0];
+					float b2 = x[0] - x[2];
+					float c2 = x[2] * y[0] - y[2] * x[0];
+
+					float e0_start = a0 * min_x + b0 * min_y + c0;
+					float e1_start = a1 * min_x + b1 * min_y + c1;
+					float e2_start = a2 * min_x + b2 * min_y + c2;
+
+					float e0_row = e0_start;
+					float e1_row = e1_start;
+					float e2_row = e2_start;
+
+					for (uint32_t y_pos = (uint32_t)min_y; y_pos <= (uint32_t)max_y; ++y_pos) {
+						float e0 = e0_row;
+						float e1 = e1_row;
+						float e2 = e2_row;
+
+						for (uint32_t x_pos = (uint32_t)min_x; x_pos <= (uint32_t)max_x; ++x_pos) {
+							// if (e0 >= 0 && e1 >= 0 && e2 >= 0) {
+							if (e0 <= 0 && e1 <= 0 && e2 <= 0) { // swapped winding order due to y-swap
+								ram[framebuffer_address + y_pos * framebuffer_stride + x_pos * 4 + 0] = 255;
+								ram[framebuffer_address + y_pos * framebuffer_stride + x_pos * 4 + 1] = 0;
+								ram[framebuffer_address + y_pos * framebuffer_stride + x_pos * 4 + 2] = 0;
+								ram[framebuffer_address + y_pos * framebuffer_stride + x_pos * 4 + 3] = 255;
+							}
+
+							e0 += a0;
+							e1 += a1;
+							e2 += a2;
+						}
+
+						e0_row += b0;
+						e1_row += b1;
+						e2_row += b2;
+					}
+
+					x += 3;
+					y += 3;
+				}
 			}
 
 			break;
 		}
 		case KOMPJUTA_GPU_COMMAND_PRESENT:
-			kore_gpu_command_list_present(&list);
-			command_list_present = true;
+			framebuffer_present = true;
 			break;
 		}
 	}
-
-	kore_gpu_device_execute_command_list(&device, &list);
 }
 
 static void update(void *data) {
-	while (!framebuffer_present && !command_list_present) {
+	while (!framebuffer_present) {
 		execute_opcode(&cpu);
 	}
 
-	if (framebuffer_present) {
-		uint8_t *pixels        = (uint8_t *)kore_gpu_buffer_lock_all(&framebuffer_buffer);
-		uint32_t buffer_stride = kore_gpu_device_align_texture_row_bytes(&device, framebuffer_width * 4);
-		for (uint32_t y = 0; y < framebuffer_height; ++y) {
-			memcpy(&pixels[buffer_stride * y], &ram[framebuffer_address + framebuffer_stride * y], framebuffer_width * 4);
-		}
-		kore_gpu_buffer_unlock(&framebuffer_buffer);
-
-		kore_gpu_texture *gpu_framebuffer = kore_gpu_device_get_framebuffer(&device);
-
-		kore_gpu_color clear_color = {
-		    .r = 0.0f,
-		    .g = 0.0f,
-		    .b = 0.0f,
-		    .a = 1.0f,
-		};
-
-		kore_gpu_render_pass_parameters parameters = {
-		    .color_attachments_count = 1,
-		    .color_attachments =
-		        {
-		            {
-		                .load_op     = KORE_GPU_LOAD_OP_CLEAR,
-		                .clear_value = clear_color,
-		                .texture =
-		                    {
-		                        .texture           = gpu_framebuffer,
-		                        .array_layer_count = 1,
-		                        .mip_level_count   = 1,
-		                        .format            = kore_gpu_device_framebuffer_format(&device),
-		                        .dimension         = KORE_GPU_TEXTURE_VIEW_DIMENSION_2D,
-		                    },
-		            },
-		        },
-		};
-		kore_gpu_command_list_begin_render_pass(&list, &parameters);
-
-		kore_gpu_command_list_end_render_pass(&list);
-
-		kore_gpu_image_copy_buffer copy_buffer = {
-		    .buffer         = &framebuffer_buffer,
-		    .bytes_per_row  = buffer_stride,
-		    .offset         = 0,
-		    .rows_per_image = framebuffer_height,
-		};
-
-		kore_gpu_image_copy_texture copy_texture = {
-		    .texture   = gpu_framebuffer,
-		    .origin_x  = 0,
-		    .origin_y  = 0,
-		    .origin_z  = 0,
-		    .mip_level = 0,
-		    .aspect    = KORE_GPU_IMAGE_COPY_ASPECT_ALL,
-		};
-
-		kore_gpu_command_list_copy_buffer_to_texture(&list, &copy_buffer, &copy_texture, framebuffer_width, framebuffer_height, 1);
-
-		kore_gpu_command_list_present(&list);
-
-		kore_gpu_device_execute_command_list(&device, &list);
-
-		framebuffer_present = false;
+	uint8_t *pixels        = (uint8_t *)kore_gpu_buffer_lock_all(&framebuffer_buffer);
+	uint32_t buffer_stride = kore_gpu_device_align_texture_row_bytes(&device, framebuffer_width * 4);
+	for (uint32_t y = 0; y < framebuffer_height; ++y) {
+		memcpy(&pixels[buffer_stride * y], &ram[framebuffer_address + framebuffer_stride * y], framebuffer_width * 4);
 	}
+	kore_gpu_buffer_unlock(&framebuffer_buffer);
 
-	command_list_present = false;
+	kore_gpu_texture *gpu_framebuffer = kore_gpu_device_get_framebuffer(&device);
+
+	kore_gpu_color clear_color = {
+	    .r = 0.0f,
+	    .g = 0.0f,
+	    .b = 0.0f,
+	    .a = 1.0f,
+	};
+
+	kore_gpu_render_pass_parameters parameters = {
+	    .color_attachments_count = 1,
+	    .color_attachments =
+	        {
+	            {
+	                .load_op     = KORE_GPU_LOAD_OP_CLEAR,
+	                .clear_value = clear_color,
+	                .texture =
+	                    {
+	                        .texture           = gpu_framebuffer,
+	                        .array_layer_count = 1,
+	                        .mip_level_count   = 1,
+	                        .format            = kore_gpu_device_framebuffer_format(&device),
+	                        .dimension         = KORE_GPU_TEXTURE_VIEW_DIMENSION_2D,
+	                    },
+	            },
+	        },
+	};
+	kore_gpu_command_list_begin_render_pass(&list, &parameters);
+
+	kore_gpu_command_list_end_render_pass(&list);
+
+	kore_gpu_image_copy_buffer copy_buffer = {
+	    .buffer         = &framebuffer_buffer,
+	    .bytes_per_row  = buffer_stride,
+	    .offset         = 0,
+	    .rows_per_image = framebuffer_height,
+	};
+
+	kore_gpu_image_copy_texture copy_texture = {
+	    .texture   = gpu_framebuffer,
+	    .origin_x  = 0,
+	    .origin_y  = 0,
+	    .origin_z  = 0,
+	    .mip_level = 0,
+	    .aspect    = KORE_GPU_IMAGE_COPY_ASPECT_ALL,
+	};
+
+	kore_gpu_command_list_copy_buffer_to_texture(&list, &copy_buffer, &copy_texture, framebuffer_width, framebuffer_height, 1);
+
+	kore_gpu_command_list_present(&list);
+
+	kore_gpu_device_execute_command_list(&device, &list);
+
+	framebuffer_present = false;
 }
 
 int kickstart(int argc, char **argv) {
@@ -1758,7 +1809,7 @@ int kickstart(int argc, char **argv) {
 
 	kore_gpu_device_create_command_list(&device, KORE_GPU_COMMAND_LIST_TYPE_GRAPHICS, &list);
 
-	while (!framebuffer_present && !command_list_present) {
+	while (!framebuffer_present) {
 		execute_opcode(&cpu);
 	}
 
